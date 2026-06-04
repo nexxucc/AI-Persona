@@ -1,6 +1,18 @@
 import { Hono } from "hono";
-const app = new Hono<{ Bindings: Env }>();
+import type { HealthResponse } from "../shared/types/health";
+import type { AppBindings } from "./types/bindings";
 
-app.get("/api/", (c) => c.json({ name: "Cloudflare" }));
+const app = new Hono<{ Bindings: AppBindings }>();
+
+app.get("/api/health", (c) => {
+	const response: HealthResponse = {
+		status: "ok",
+		service: "ai-persona-api",
+		environment: c.env?.APP_ENV ?? "development",
+		timestamp: new Date().toISOString(),
+	};
+
+	return c.json(response);
+});
 
 export default app;

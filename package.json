@@ -1,8 +1,8 @@
 {
-  "name": "vite-react-template",
-  "description": "A template for building a React application with Vite, Hono, and Cloudflare Workers",
+  "name": "ai-persona",
+  "description": "RAG-grounded AI persona with voice and chat interview booking.",
   "cloudflare": {
-    "label": "Vite React Template",
+    "label": "AI Persona",
     "products": [
       "Workers"
     ],
