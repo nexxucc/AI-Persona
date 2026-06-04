@@ -14,6 +14,32 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
+	"vars": {
+		"APP_ENV": "production"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "persona-db-prod",
+			"database_id": "3a1394e2-40be-4c48-a0f3-f37cbc5fbd9f",
+			"migrations_dir": "migrations"
+		}
+	],
+	"env": {
+		"development": {
+			"vars": {
+				"APP_ENV": "development"
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "persona-db-dev",
+					"database_id": "01baea77-276d-4462-9e78-d34a7bff1cf5",
+					"migrations_dir": "migrations"
+				}
+			]
+		}
+	},
 	"assets": {
 		"directory": "./dist/client",
 		"not_found_handling": "single-page-application",

@@ -2,9 +2,6 @@
 # Copy this file to .dev.vars and replace placeholders with development values.
 # Never commit .dev.vars or real credentials.
 
-# Runtime environment
-APP_ENV="development"
-
 # Gemini API — used server-side for grounded responses and embeddings
 GEMINI_API_KEY="replace-with-dev-gemini-api-key"
 

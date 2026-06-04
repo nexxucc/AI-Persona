@@ -38,7 +38,7 @@
     "cf-typegen": "wrangler types",
     "check": "tsc && vite build && wrangler deploy --dry-run",
     "deploy": "wrangler deploy",
-    "dev": "vite",
+    "dev": "CLOUDFLARE_ENV=development vite",
     "lint": "eslint .",
     "preview": "npm run build && vite preview",
     "check:content": "node scripts/validate-content-standards.mjs"
