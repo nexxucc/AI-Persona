@@ -1,0 +1,22 @@
+# Local development configuration only.
+# Copy this file to .dev.vars and replace placeholders with development values.
+# Never commit .dev.vars or real credentials.
+
+# Runtime environment
+APP_ENV="development"
+
+# Gemini API — used server-side for grounded responses and embeddings
+GEMINI_API_KEY="replace-with-dev-gemini-api-key"
+
+# Google Calendar OAuth — created when booking integration is implemented
+GOOGLE_CLIENT_ID="replace-with-dev-google-oauth-client-id"
+GOOGLE_CLIENT_SECRET="replace-with-dev-google-oauth-client-secret"
+GOOGLE_REFRESH_TOKEN="replace-with-dev-google-refresh-token"
+
+# Google Calendar configuration
+GOOGLE_BOOKINGS_CALENDAR_ID="replace-with-dev-bookings-calendar-id"
+GOOGLE_AVAILABILITY_CALENDAR_IDS="primary"
+GOOGLE_DEFAULT_TIMEZONE="Asia/Kolkata"
+
+# Vapi tool endpoint authentication — created when voice integration is implemented
+VAPI_WEBHOOK_SECRET="replace-with-dev-vapi-webhook-secret"
