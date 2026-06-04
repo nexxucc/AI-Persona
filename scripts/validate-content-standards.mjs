@@ -11,7 +11,7 @@ const allowedExtensions = new Set([
 	".tsx",
 ]);
 
-const targets = ["README.md", "docs", "public", "src"];
+const targets = ["README.md", "docs", "public", "sources", "src"];
 
 function isForbiddenSymbol(character) {
 	const codepoint = character.codePointAt(0);

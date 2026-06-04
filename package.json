@@ -41,7 +41,9 @@
     "dev": "CLOUDFLARE_ENV=development vite",
     "lint": "eslint .",
     "preview": "npm run build && vite preview",
-    "check:content": "node scripts/validate-content-standards.mjs"
+    "check:content": "node scripts/validate-content-standards.mjs",
+    "test:ingestion": "node --test scripts/ingest/lib/*.test.mjs",
+    "ingest:resume:preview": "node scripts/ingest/prepare-resume-corpus.mjs"
   },
   "type": "module"
 }
