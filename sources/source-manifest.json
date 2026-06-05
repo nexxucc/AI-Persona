@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "profile": {
+    "displayName": "Vansh Jain",
+    "githubOwner": "nexxucc"
+  },
+  "resume": {
+    "id": "resume:vansh-jain",
+    "path": "sources/resume/vansh-jain-resume.md",
+    "title": "Vansh Jain Resume",
+    "publicUrl": "https://github.com/nexxucc/AI-Persona/blob/main/sources/resume/vansh-jain-resume.md"
+  },
+  "github": {
+    "owner": "nexxucc",
+    "scope": "all_public_repositories",
+    "includeForks": true,
+    "includeArchived": true
+  }
+}
