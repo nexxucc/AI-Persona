@@ -87,9 +87,34 @@ export async function retrieveHybridEvidence(
 		? mergedResults.filter((result) => !shouldExcludeForBroadProjectAnswer(result))
 		: mergedResults;
 
+	const mentionedRepositoryNames = getMentionedRepositoryNames(
+		curatedResults,
+		normalizedQuery,
+	);
+
+	const repositoryExpansionResults =
+		mentionedRepositoryNames.size > 0
+			? await searchMentionedRepositoryEvidence(db, mentionedRepositoryNames)
+			: [];
+
+	const scopedBaseResults =
+		projectQuery && mentionedRepositoryNames.size > 0
+			? curatedResults.filter(
+					(result) =>
+						result.sourceType === "resume" ||
+						!result.repositoryName ||
+						mentionedRepositoryNames.has(result.repositoryName),
+				)
+			: curatedResults;
+
+	const scopedResults =
+		repositoryExpansionResults.length > 0
+			? [...repositoryExpansionResults, ...scopedBaseResults]
+			: scopedBaseResults;
+
 	const rankedResults = projectQuery
-		? diversifyProjectEvidence(curatedResults, normalizedQuery)
-		: curatedResults;
+		? diversifyProjectEvidence(scopedResults, normalizedQuery)
+		: scopedResults;
 
 	return dedupeEvidenceForDisplay(rankedResults, projectQuery, normalizedQuery).slice(0, finalLimit);
 }
@@ -679,6 +704,135 @@ function asString(value: unknown): string | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
+}
+
+
+
+async function searchMentionedRepositoryEvidence(
+	db: D1Database,
+	repositoryNames: Set<string>,
+): Promise<EvidenceResult[]> {
+	const names = [...repositoryNames].filter(Boolean);
+
+	if (names.length === 0) {
+		return [];
+	}
+
+	const placeholders = names.map(() => "?").join(", ");
+
+	const rows = await db
+		.prepare(
+			`
+			WITH ranked_repository_chunks AS (
+				SELECT
+					source_chunks.id AS chunk_id,
+					source_chunks.document_id,
+					source_chunks.title,
+					source_chunks.source_type,
+					source_chunks.repository_name,
+					source_chunks.file_path,
+					source_chunks.commit_sha,
+					source_chunks.public_url,
+					source_chunks.content,
+					source_chunks.metadata_json AS metadata,
+					ROW_NUMBER() OVER (
+						PARTITION BY source_chunks.document_id
+						ORDER BY source_chunks.chunk_index ASC
+					) AS document_chunk_rank
+				FROM source_chunks
+				WHERE source_chunks.repository_name IN (${placeholders})
+				AND source_chunks.source_type IN (
+					'github_readme',
+					'github_repository',
+					'github_manifest',
+					'github_document',
+					'github_commit'
+				)
+			)
+			SELECT
+				chunk_id,
+				document_id,
+				title,
+				source_type,
+				repository_name,
+				file_path,
+				commit_sha,
+				public_url,
+				content,
+				metadata
+			FROM ranked_repository_chunks
+			WHERE document_chunk_rank = 1
+			ORDER BY
+				CASE source_type
+					WHEN 'github_readme' THEN 1
+					WHEN 'github_repository' THEN 2
+					WHEN 'github_manifest' THEN 3
+					WHEN 'github_document' THEN 4
+					WHEN 'github_commit' THEN 5
+					ELSE 6
+				END,
+				CASE
+					WHEN file_path = 'README.md' THEN 1
+					WHEN title LIKE '%Evidence Summary%' THEN 2
+					WHEN title LIKE '%Repository Metadata%' THEN 3
+					WHEN file_path LIKE '%requirements%' THEN 4
+					WHEN file_path LIKE '%pyproject%' THEN 5
+					WHEN file_path LIKE 'src/%' THEN 6
+					WHEN file_path LIKE 'scripts/%' THEN 7
+					ELSE 8
+				END
+			LIMIT 24;
+			`,
+		)
+		.bind(...names)
+		.all<{
+			chunk_id: string;
+			document_id: string;
+			title: string;
+			source_type: EvidenceResult["sourceType"];
+			repository_name: string | null;
+			file_path: string | null;
+			commit_sha: string | null;
+			public_url: string;
+			content: string;
+			metadata: string | null;
+		}>();
+
+	return rows.results.map((row, index) => ({
+		chunkId: row.chunk_id,
+		documentId: row.document_id,
+		title: row.title,
+		sourceType: row.source_type,
+		repositoryName: row.repository_name,
+		filePath: row.file_path,
+		commitSha: row.commit_sha,
+		publicUrl: row.public_url,
+		content: row.content,
+		score: 80 - index,
+		retrievalMode: "exact",
+		metadata: {
+			...parseMetadata(row.metadata),
+			repository_expansion: true,
+		},
+	}));
+}
+
+function getMentionedRepositoryNames(
+	results: EvidenceResult[],
+	query: string,
+): Set<string> {
+	const mentionedRepositoryNames = new Set<string>();
+
+	for (const result of results) {
+		if (
+			result.repositoryName &&
+			isRepositoryExplicitlyMentioned(query, result.repositoryName)
+		) {
+			mentionedRepositoryNames.add(result.repositoryName);
+		}
+	}
+
+	return mentionedRepositoryNames;
 }
 
 function dedupeEvidenceForDisplay(
