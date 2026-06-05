@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { getAvailability, bookCalendarEvent } from "./calendar/googleCalendar";
+import { handleCalendarChatMessage } from "./chat/calendarIntent";
 import { generateGroundedAnswer } from "./chat/groundedAnswer";
 import { retrieveHybridEvidence } from "./retrieval/hybridRetrieval";
 import type { HealthResponse } from "../shared/types/health";
@@ -40,12 +42,47 @@ app.post("/api/retrieval/search", async (c) => {
 });
 
 
+
+app.post("/api/calendar/availability", async (c) => {
+	const body = await c.req.json().catch(() => ({}));
+
+	try {
+		const availability = await getAvailability(c.env, body);
+		return c.json(availability);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return c.json({ error: message }, 500);
+	}
+});
+
+app.post("/api/calendar/book", async (c) => {
+	const body = await c.req.json().catch(() => ({}));
+
+	try {
+		const booking = await bookCalendarEvent(c.env, body);
+		return c.json(booking);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return c.json({ error: message }, 400);
+	}
+});
+
 app.post("/api/chat", async (c) => {
 	const body = await c.req.json<{ message?: string; conversationId?: string }>().catch(() => null);
 	const message = body?.message?.trim();
 
 	if (!message) {
 		return c.json({ error: "A non-empty message is required." }, 400);
+	}
+
+	const calendarResponse = await handleCalendarChatMessage(
+		c.env,
+		message,
+		body?.conversationId,
+	);
+
+	if (calendarResponse) {
+		return c.json(calendarResponse);
 	}
 
 	const evidence = await retrieveHybridEvidence(
