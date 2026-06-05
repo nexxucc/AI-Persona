@@ -1,0 +1,214 @@
+{
+  "version": 1,
+  "allowed_statuses": [
+    "canonical",
+    "active",
+    "older_version",
+    "prototype",
+    "duplicate",
+    "non_working_copy",
+    "low_signal",
+    "exclude_from_general_answers",
+    "unreviewed"
+  ],
+  "allowed_priorities": [
+    "high",
+    "medium",
+    "low",
+    "exclude_from_general_answers"
+  ],
+  "repositories": {
+    "AI-Persona": {
+      "status": "canonical",
+      "priority": "high",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "Assessment-Creator": {
+      "status": "canonical",
+      "priority": "high",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "nexxucc": {
+      "status": "low_signal",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": "Low-signal repository. Do not use for general project answers."
+    },
+    "infotainment-system": {
+      "status": "canonical",
+      "priority": "medium",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "CellSignalMapper": {
+      "status": "canonical",
+      "priority": "high",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "ChandraQuant-Siddhanta": {
+      "status": "canonical",
+      "priority": "high",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "Wealth-Curator": {
+      "status": "canonical",
+      "priority": "high",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "Compiler-Spellchecker": {
+      "status": "prototype",
+      "priority": "medium",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "LearnFast": {
+      "status": "active",
+      "priority": "medium",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "MatrimonyConnect": {
+      "status": "prototype",
+      "priority": "medium",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "semantic-search": {
+      "status": "canonical",
+      "priority": "high",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "ai-shopify-creator": {
+      "status": "canonical",
+      "priority": "high",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "graha-s-cana": {
+      "status": "canonical",
+      "priority": "high",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "Portfolio": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "NLP-Research-Assistant": {
+      "status": "canonical",
+      "priority": "high",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "Fire-detection-using-YOLOv5": {
+      "status": "active",
+      "priority": "medium",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "SkyCellMapper": {
+      "status": "non_working_copy",
+      "priority": "medium",
+      "canonical_repository": "CellSignalMapper",
+      "notes": ""
+    },
+    "Vitalogix": {
+      "status": "prototype",
+      "priority": "low",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "colab": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "inventory_manager": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "ecommerce_platform_ui": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "currency_converter": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "calculator": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "quiz_app": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "Dice-app": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "Hacktoberfest2024": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": "Low-signal repository. Do not use for general project answers."
+    },
+    "hacktoberfest": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": "Low-signal repository. Do not use for general project answers."
+    },
+    "Basic-app": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "Login-Page": {
+      "status": "low_signal",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "Hackathon-8.0": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "vowel-counter": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    },
+    "intro": {
+      "status": "exclude_from_general_answers",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": null,
+      "notes": ""
+    }
+  }
+}

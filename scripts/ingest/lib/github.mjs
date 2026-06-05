@@ -9,26 +9,32 @@ import {
 } from "./content.mjs";
 
 export const DEFAULT_COMMITS_PER_REPOSITORY = 20;
-export const DEFAULT_MAX_EVIDENCE_FILES_PER_REPOSITORY = 8;
-export const DEFAULT_MAX_EVIDENCE_FILE_BYTES = 120_000;
+export const DEFAULT_COMMIT_DETAILS_PER_REPOSITORY = 10;
+export const DEFAULT_MAX_EVIDENCE_FILES_PER_REPOSITORY = 28;
+export const DEFAULT_MAX_EVIDENCE_FILE_BYTES = 90_000;
 
 const evidenceFileBasenames = new Set([
-	"dockerfile",
-	"docker-compose.yml",
+	".env.example",
+	"app.json",
+	"cargo.toml",
 	"docker-compose.yaml",
+	"docker-compose.yml",
+	"dockerfile",
+	"eas.json",
+	"eslint.config.js",
+	"firebase.json",
+	"next.config.js",
+	"next.config.ts",
 	"package.json",
-	"requirements.txt",
 	"pyproject.toml",
-	"vite.config.ts",
-	"vite.config.js",
-	"wrangler.json",
-	"wrangler.jsonc",
-	"tsconfig.json",
+	"requirements.txt",
 	"tailwind.config.js",
 	"tailwind.config.ts",
-	"firebase.json",
-	"app.json",
-	"eas.json",
+	"tsconfig.json",
+	"vite.config.js",
+	"vite.config.ts",
+	"wrangler.json",
+	"wrangler.jsonc",
 ]);
 
 const evidenceFileExtensions = new Set([
@@ -41,20 +47,75 @@ const evidenceFileExtensions = new Set([
 	".yml",
 ]);
 
+const sourceFileExtensions = new Set([
+	".c",
+	".cpp",
+	".css",
+	".go",
+	".h",
+	".hpp",
+	".java",
+	".js",
+	".jsx",
+	".mjs",
+	".py",
+	".rs",
+	".sh",
+	".sol",
+	".sql",
+	".ts",
+	".tsx",
+]);
+
+const selectedSourcePrefixes = [
+	"api/",
+	"app/",
+	"backend/",
+	"components/",
+	"frontend/",
+	"lib/",
+	"models/",
+	"pages/",
+	"scripts/",
+	"server/",
+	"src/",
+	"tests/",
+	"worker/",
+];
+
+const selectedSourceBasenames = new Set([
+	"app.py",
+	"index.js",
+	"index.ts",
+	"main.cpp",
+	"main.py",
+	"main.ts",
+	"server.js",
+	"server.ts",
+]);
+
 const excludedPathFragments = [
-	"/node_modules/",
-	"/dist/",
-	"/build/",
 	"/.git/",
+	"/.next/",
+	"/.venv/",
+	"/build/",
 	"/coverage/",
+	"/dist/",
+	"/node_modules/",
+	"/target/",
 ];
 
 const excludedBasenames = new Set([
+	"bun.lockb",
 	"package-lock.json",
 	"pnpm-lock.yaml",
 	"yarn.lock",
-	"bun.lockb",
 ]);
+
+const lowSignalRepositoryPatterns = [
+	/^nexxucc$/i,
+	/hacktoberfest/i,
+];
 
 export function getGitHubToken() {
 	return process.env.GITHUB_SOURCE_TOKEN?.trim() || "";
@@ -79,13 +140,23 @@ export async function githubFetchJson(url, token = getGitHubToken()) {
 		headers: buildGitHubHeaders(token),
 	});
 
+	if (response.status === 204) {
+		return null;
+	}
+
 	if (!response.ok) {
 		throw new Error(
 			`GitHub request failed: ${response.status} ${response.statusText} for ${url}`,
 		);
 	}
 
-	return response.json();
+	const body = await response.text();
+
+	if (!body.trim()) {
+		return null;
+	}
+
+	return JSON.parse(body);
 }
 
 export async function fetchAllPublicRepositories(owner, token = getGitHubToken()) {
@@ -155,6 +226,27 @@ export async function fetchRecentCommits(
 	);
 }
 
+export async function fetchCommitDetails(owner, repositoryName, sha, token = getGitHubToken()) {
+	return githubFetchJson(
+		`https://api.github.com/repos/${owner}/${repositoryName}/commits/${sha}`,
+		token,
+	);
+}
+
+export async function fetchRepositoryContributors(
+	owner,
+	repositoryName,
+	limit = 20,
+	token = getGitHubToken(),
+) {
+	const contributors = await githubFetchJson(
+		`https://api.github.com/repos/${owner}/${repositoryName}/contributors?per_page=${limit}`,
+		token,
+	);
+
+	return Array.isArray(contributors) ? contributors : [];
+}
+
 export function isEvidencePath(path) {
 	const normalized = `/${path}`;
 	const lowerPath = path.toLowerCase();
@@ -184,7 +276,26 @@ export function isEvidencePath(path) {
 		return true;
 	}
 
+	if (isSelectedSourcePath(lowerPath)) {
+		return true;
+	}
+
 	return evidenceFileExtensions.has(extname(lowerPath)) && lowerPath.split("/").length <= 2;
+}
+
+export function isSelectedSourcePath(path) {
+	const lowerPath = path.toLowerCase();
+	const base = basename(lowerPath);
+
+	if (!sourceFileExtensions.has(extname(lowerPath))) {
+		return false;
+	}
+
+	if (selectedSourceBasenames.has(base)) {
+		return true;
+	}
+
+	return selectedSourcePrefixes.some((prefix) => lowerPath.startsWith(prefix));
 }
 
 export function selectEvidenceTreeEntries(treeEntries, options = {}) {
@@ -197,19 +308,62 @@ export function selectEvidenceTreeEntries(treeEntries, options = {}) {
 		.filter((entry) => isEvidencePath(entry.path))
 		.filter((entry) => typeof entry.size !== "number" || entry.size <= maxBytes)
 		.sort((left, right) => {
-			const leftPath = left.path.toLowerCase();
-			const rightPath = right.path.toLowerCase();
+			const priorityDifference =
+				getEvidencePathPriority(left.path) - getEvidencePathPriority(right.path);
 
-			const leftReadme = basename(leftPath).startsWith("readme.");
-			const rightReadme = basename(rightPath).startsWith("readme.");
-
-			if (leftReadme !== rightReadme) {
-				return leftReadme ? -1 : 1;
+			if (priorityDifference !== 0) {
+				return priorityDifference;
 			}
 
-			return leftPath.localeCompare(rightPath);
+			return left.path.toLowerCase().localeCompare(right.path.toLowerCase());
 		})
 		.slice(0, maxFiles);
+}
+
+export function getEvidencePathPriority(path) {
+	const lowerPath = path.toLowerCase();
+	const base = basename(lowerPath);
+
+	if (base.startsWith("readme.")) {
+		return 0;
+	}
+
+	if (lowerPath.startsWith("docs/")) {
+		return 1;
+	}
+
+	if (evidenceFileBasenames.has(base)) {
+		return 2;
+	}
+
+	if (lowerPath.startsWith(".github/workflows/")) {
+		return 3;
+	}
+
+	if (isSelectedSourcePath(lowerPath)) {
+		return 4;
+	}
+
+	return 5;
+}
+
+export function classifyEvidenceSourceType(path) {
+	const lowerPath = path.toLowerCase();
+
+	if (
+		lowerPath.startsWith("docs/") ||
+		lowerPath.startsWith("src/") ||
+		lowerPath.startsWith("app/") ||
+		lowerPath.startsWith("server/") ||
+		lowerPath.startsWith("worker/") ||
+		lowerPath.startsWith("lib/") ||
+		lowerPath.startsWith("scripts/") ||
+		isSelectedSourcePath(lowerPath)
+	) {
+		return "github_document";
+	}
+
+	return "github_manifest";
 }
 
 export function buildRawFileUrl(repository, filePath) {
@@ -232,7 +386,7 @@ export async function fetchRawTextFile(repository, filePath) {
 	return response.text();
 }
 
-export function createRepositoryMetadataMarkdown(repository) {
+export function createRepositoryMetadataMarkdown(repository, contributors = [], override = null) {
 	const lines = [
 		`# ${repository.full_name}`,
 		"",
@@ -256,10 +410,144 @@ export function createRepositoryMetadataMarkdown(repository) {
 		lines.push(`- Topics: ${repository.topics.join(", ")}`);
 	}
 
+	if (override) {
+		lines.push("", "## Repository Curation", "");
+		lines.push(`- Status: ${override.status ?? "unreviewed"}`);
+		lines.push(`- Priority: ${override.priority ?? "medium"}`);
+
+		if (override.canonical_repository) {
+			lines.push(`- Canonical repository: ${override.canonical_repository}`);
+		}
+
+		if (override.notes) {
+			lines.push(`- Notes: ${override.notes}`);
+		}
+	}
+
+	if (contributors.length > 0) {
+		lines.push("", "## Contributors", "");
+
+		for (const contributor of contributors.slice(0, 10)) {
+			lines.push(
+				`- ${contributor.login} | contributions: ${contributor.contributions} | ${contributor.html_url}`,
+			);
+		}
+	}
+
+	if (isLowSignalRepository(repository)) {
+		lines.push("", "## Evidence Quality", "", "- Low signal repository: Yes");
+	}
+
 	return `${lines.join("\n")}\n`;
 }
 
-export function createCommitHistoryMarkdown(repository, commits) {
+export function createRepositoryEvidenceSummaryMarkdown({
+	repository,
+	readme,
+	selectedEntries,
+	commits,
+	commitDetails,
+	contributors,
+	override = null,
+}) {
+	const lines = [
+		`# ${repository.full_name} Evidence Summary`,
+		"",
+		"## Repository Identity",
+		"",
+		`- Name: ${repository.name}`,
+		`- URL: ${repository.html_url}`,
+		`- Description: ${repository.description ?? "No description provided"}`,
+		`- Primary language: ${repository.language ?? "Not specified"}`,
+		`- Topics: ${Array.isArray(repository.topics) && repository.topics.length > 0 ? repository.topics.join(", ") : "None"}`,
+		`- Default branch: ${repository.default_branch}`,
+		`- Fork: ${repository.fork ? "Yes" : "No"}`,
+		`- Archived: ${repository.archived ? "Yes" : "No"}`,
+	];
+
+	if (readme?.path) {
+		lines.push(`- README indexed: ${readme.path}`);
+	}
+
+	if (override) {
+		lines.push(`- Curated status: ${override.status ?? "unreviewed"}`);
+		lines.push(`- Curated priority: ${override.priority ?? "medium"}`);
+
+		if (override.canonical_repository) {
+			lines.push(`- Canonical repository: ${override.canonical_repository}`);
+		}
+
+		if (override.notes) {
+			lines.push(`- Curation notes: ${override.notes}`);
+		}
+	}
+
+	if (isLowSignalRepository(repository, override)) {
+		lines.push(`- Low signal repository: Yes`);
+	}
+
+	lines.push("", "## Indexed Evidence Files", "");
+
+	for (const entry of selectedEntries.slice(0, 20)) {
+		lines.push(
+			`- ${entry.path} | type: ${classifyEvidenceSourceType(entry.path)} | size: ${entry.size ?? "unknown"} bytes`,
+		);
+	}
+
+	if (override) {
+		lines.push("", "## Repository Curation", "");
+		lines.push(`- Status: ${override.status ?? "unreviewed"}`);
+		lines.push(`- Priority: ${override.priority ?? "medium"}`);
+
+		if (override.canonical_repository) {
+			lines.push(`- Canonical repository: ${override.canonical_repository}`);
+		}
+
+		if (override.notes) {
+			lines.push(`- Notes: ${override.notes}`);
+		}
+	}
+
+	if (contributors.length > 0) {
+		lines.push("", "## Contributor Signals", "");
+
+		for (const contributor of contributors.slice(0, 10)) {
+			lines.push(
+				`- ${contributor.login} | contributions: ${contributor.contributions} | ${contributor.html_url}`,
+			);
+		}
+	}
+
+	if (commits.length > 0) {
+		lines.push("", "## Recent Commit Signals", "");
+
+		for (const commit of commits.slice(0, 12)) {
+			const sha = commit.sha.slice(0, 12);
+			const message = commit.commit?.message?.split("\n")[0] ?? "No commit message";
+			const date = commit.commit?.author?.date ?? commit.commit?.committer?.date ?? "Unknown date";
+
+			lines.push(`- ${sha} | ${date} | ${message} | ${commit.html_url}`);
+		}
+	}
+
+	if (commitDetails.length > 0) {
+		lines.push("", "## Recent Commit File Changes", "");
+
+		for (const detail of commitDetails.slice(0, 10)) {
+			const sha = detail.sha.slice(0, 12);
+			const message = detail.commit?.message?.split("\n")[0] ?? "No commit message";
+			const files = Array.isArray(detail.files)
+				? detail.files.slice(0, 12).map((file) => file.filename).join(", ")
+				: "No files returned";
+
+			lines.push(`- ${sha} | ${message} | files: ${files}`);
+		}
+	}
+
+	return `${lines.join("\n")}\n`;
+}
+
+export function createCommitHistoryMarkdown(repository, commits, commitDetails = []) {
 	const lines = [
 		`# ${repository.full_name} Commit Metadata`,
 		"",
@@ -277,7 +565,42 @@ export function createCommitHistoryMarkdown(repository, commits) {
 		lines.push(`- ${sha} | ${date} | ${author} | ${message} | ${url}`);
 	}
 
+	if (commitDetails.length > 0) {
+		lines.push("", "## Commit File Changes", "");
+
+		for (const detail of commitDetails.slice(0, 10)) {
+			const sha = detail.sha.slice(0, 12);
+			const files = Array.isArray(detail.files)
+				? detail.files.slice(0, 12).map((file) => file.filename).join(", ")
+				: "No files returned";
+
+			lines.push(`- ${sha} | files: ${files}`);
+		}
+	}
+
 	return `${lines.join("\n")}\n`;
+}
+
+export function getRepositoryOverride(repository, overrides = {}) {
+	return (
+		overrides.repositories?.[repository.name] ??
+		overrides.repositories?.[repository.full_name] ??
+		null
+	);
+}
+
+export function isLowSignalRepository(repository, override = null) {
+	if (
+		override?.status === "low_signal" ||
+		override?.status === "exclude_from_general_answers" ||
+		override?.status === "duplicate" ||
+		override?.status === "non_working_copy" ||
+		override?.priority === "exclude_from_general_answers"
+	) {
+		return true;
+	}
+
+	return lowSignalRepositoryPatterns.some((pattern) => pattern.test(repository.name));
 }
 
 export function createSourceDocument({
