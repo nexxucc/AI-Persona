@@ -3,6 +3,7 @@ import { getAvailability, bookCalendarEvent } from "./calendar/googleCalendar";
 import { handleCalendarChatMessage } from "./chat/calendarIntent";
 import { generateGroundedAnswer } from "./chat/groundedAnswer";
 import { retrieveHybridEvidence } from "./retrieval/hybridRetrieval";
+import { handleVapiToolCalls, isAuthorizedVapiRequest } from "./voice/vapi";
 import type { HealthResponse } from "../shared/types/health";
 import type { AppBindings } from "./types/bindings";
 
@@ -65,6 +66,23 @@ app.post("/api/calendar/book", async (c) => {
 		const message = error instanceof Error ? error.message : String(error);
 		return c.json({ error: message }, 400);
 	}
+});
+
+
+app.post("/api/vapi/tools", async (c) => {
+	if (!isAuthorizedVapiRequest(c.env, c.req.raw)) {
+		return c.json({ error: "Unauthorized Vapi tool request." }, 401);
+	}
+
+	const body = await c.req.json().catch(() => null);
+
+	if (!body) {
+		return c.json({ error: "Invalid Vapi tool payload." }, 400);
+	}
+
+	const response = await handleVapiToolCalls(c.env, body);
+
+	return c.json(response);
 });
 
 app.post("/api/chat", async (c) => {
