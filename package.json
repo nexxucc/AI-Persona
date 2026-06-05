@@ -50,7 +50,8 @@
     "retrieval:exact:smoke": "node scripts/ingest/smoke-exact-search.mjs",
     "vector:chunks:export": "node scripts/embedding/export-development-chunks.mjs",
     "vector:embeddings:generate": "node scripts/embedding/generate-development-embeddings.mjs",
-    "vector:upsert:dev": "node scripts/embedding/upsert-development-vectors.mjs"
+    "vector:upsert:dev": "node scripts/embedding/upsert-development-vectors.mjs",
+    "vector:semantic:smoke": "node scripts/embedding/smoke-vector-search.mjs"
   },
   "type": "module"
 }
