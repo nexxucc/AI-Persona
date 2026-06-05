@@ -1,0 +1,496 @@
+import { bookCalendarEvent, getAvailability } from "../calendar/googleCalendar";
+import { generateGroundedAnswer } from "../chat/groundedAnswer";
+import { retrieveHybridEvidence } from "../retrieval/hybridRetrieval";
+import type { AvailabilitySlot } from "../calendar/types";
+import type { EvidenceResult, EvidenceSourceType } from "../retrieval/types";
+import type { AppBindings } from "../types/bindings";
+
+type VapiToolCallResponse = {
+	results: Array<{
+		toolCallId: string;
+		result: unknown;
+	}>;
+};
+
+type ToolCall = {
+	id: string;
+	name: string;
+	arguments: Record<string, unknown>;
+};
+
+export async function handleVapiToolCalls(
+	env: AppBindings,
+	body: unknown,
+): Promise<VapiToolCallResponse> {
+	const toolCalls = extractToolCalls(body);
+
+	const results = await Promise.all(
+		toolCalls.map(async (toolCall) => ({
+			toolCallId: toolCall.id,
+			result: await executeToolCall(env, toolCall),
+		})),
+	);
+
+	return { results };
+}
+
+export function isAuthorizedVapiRequest(
+	env: AppBindings,
+	request: Request,
+): boolean {
+	const configuredSecret = env.VAPI_WEBHOOK_SECRET?.trim();
+
+	if (!configuredSecret && env.APP_ENV === "development") {
+		return true;
+	}
+
+	if (!configuredSecret) {
+		return false;
+	}
+
+	const authorization = request.headers.get("authorization")?.trim() ?? "";
+	const bearerToken = authorization.toLowerCase().startsWith("bearer ")
+		? authorization.slice("bearer ".length).trim()
+		: "";
+
+	const explicitSecret = request.headers.get("x-vapi-secret")?.trim() ?? "";
+
+	return bearerToken === configuredSecret || explicitSecret === configuredSecret;
+}
+
+async function executeToolCall(
+	env: AppBindings,
+	toolCall: ToolCall,
+): Promise<unknown> {
+	try {
+		switch (toolCall.name) {
+			case "answer_question":
+				return answerQuestion(env, toolCall.arguments);
+			case "get_availability":
+				return getVoiceAvailability(env, toolCall.arguments);
+			case "book_call":
+				return bookVoiceCall(env, toolCall.arguments);
+			default:
+				return `I do not know how to run the tool "${toolCall.name}".`;
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return `I could not complete that action: ${message}`;
+	}
+}
+
+async function answerQuestion(
+	env: AppBindings,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const question =
+		asString(args.question) ??
+		asString(args.query) ??
+		asString(args.message) ??
+		"";
+
+	if (!question.trim()) {
+		return "I need a question to answer.";
+	}
+
+	const evidence = await retrieveVoiceEvidence(env, question);
+	const generationQuestion = buildVoiceGenerationQuestion(question);
+
+	const groundedAnswer = await generateGroundedAnswer(
+		env.GEMINI_API_KEY,
+		generationQuestion,
+		evidence,
+	);
+
+	return [
+		"Use this as grounded information about Vansh. When speaking, phrase it as Vansh's AI representative, not as if you are Vansh himself.",
+		groundedAnswer.answer,
+	].join("\n\n");
+}
+
+
+
+async function retrieveVoiceEvidence(
+	env: AppBindings,
+	question: string,
+): Promise<EvidenceResult[]> {
+	const normalizedQuestion = question.toLowerCase();
+	const retrievalQuery = buildVoiceRetrievalQuery(question);
+
+	const primaryEvidence = await retrieveHybridEvidence(
+		env.DB,
+		env.VECTORIZE,
+		env.GEMINI_API_KEY,
+		retrievalQuery,
+		{
+			finalLimit: 8,
+		},
+	);
+
+	if (!isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
+		return primaryEvidence;
+	}
+
+	const [resumeEvidence, projectEvidence] = await Promise.all([
+		fetchResumeEvidence(env, 5),
+		retrieveHybridEvidence(
+			env.DB,
+			env.VECTORIZE,
+			env.GEMINI_API_KEY,
+			"What kind of AI projects has Vansh worked on? curated GitHub projects resume skills experience",
+			{
+				finalLimit: 8,
+			},
+		),
+	]);
+
+	return mergeEvidenceResults([
+		...resumeEvidence,
+		...primaryEvidence,
+		...projectEvidence,
+	]).slice(0, 10);
+}
+
+function buildVoiceGenerationQuestion(question: string): string {
+	const normalizedQuestion = question.toLowerCase();
+
+	if (!isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
+		return question;
+	}
+
+	return [
+		question,
+		"",
+		"Answer as a concise role-fit response for a recruiter or evaluator.",
+		"Use resume, education, experience, skills, and curated GitHub project evidence.",
+		"If the exact role description is not present, answer generally for an AI/software engineering role and do not invent requirements.",
+	].join("\n");
+}
+
+async function fetchResumeEvidence(
+	env: AppBindings,
+	limit: number,
+): Promise<EvidenceResult[]> {
+	const rows = await env.DB
+		.prepare(
+			`
+			SELECT
+				id AS chunk_id,
+				document_id,
+				title,
+				source_type,
+				repository_name,
+				file_path,
+				commit_sha,
+				public_url,
+				content,
+				metadata_json AS metadata
+			FROM source_chunks
+			WHERE source_type = 'resume'
+			ORDER BY chunk_index ASC
+			LIMIT ?
+			`,
+		)
+		.bind(limit)
+		.all<{
+			chunk_id: string;
+			document_id: string;
+			title: string;
+			source_type: EvidenceSourceType;
+			repository_name: string | null;
+			file_path: string | null;
+			commit_sha: string | null;
+			public_url: string;
+			content: string;
+			metadata: string | null;
+		}>();
+
+	return (rows.results ?? []).map((row, index) => ({
+		chunkId: row.chunk_id,
+		documentId: row.document_id,
+		title: row.title,
+		sourceType: row.source_type,
+		repositoryName: row.repository_name,
+		filePath: row.file_path,
+		commitSha: row.commit_sha,
+		publicUrl: row.public_url,
+		content: row.content,
+		score: 100 - index,
+		retrievalMode: "exact",
+		metadata: parseMetadata(row.metadata),
+	}));
+}
+
+function mergeEvidenceResults(evidenceGroups: EvidenceResult[]): EvidenceResult[] {
+	const seen = new Set<string>();
+	const merged: EvidenceResult[] = [];
+
+	for (const evidence of evidenceGroups) {
+		if (seen.has(evidence.chunkId)) {
+			continue;
+		}
+
+		seen.add(evidence.chunkId);
+		merged.push(evidence);
+	}
+
+	return merged;
+}
+
+function parseMetadata(value: string | null | undefined): Record<string, unknown> {
+	if (!value) {
+		return {};
+	}
+
+	try {
+		const parsedValue = JSON.parse(value);
+		return parsedValue && typeof parsedValue === "object"
+			? parsedValue as Record<string, unknown>
+			: {};
+	} catch {
+		return {};
+	}
+}
+
+function buildVoiceRetrievalQuery(question: string): string {
+	const normalizedQuestion = question.toLowerCase();
+
+	if (isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
+		return [
+			question,
+			"resume education experience internship skills projects AI ML software engineering role fit",
+			"curated GitHub projects AI-Persona NLP-Research-Assistant ChandraQuant-Siddhanta CellSignalMapper Assessment-Creator",
+		].join("\n");
+	}
+
+	return question;
+}
+
+function isRoleFitOrBackgroundQuestion(normalizedQuestion: string): boolean {
+	return [
+		"good fit",
+		"right person",
+		"why should",
+		"why vansh",
+		"background",
+		"experience",
+		"skills",
+		"strength",
+		"hire",
+		"role",
+		"internship",
+	].some((term) => normalizedQuestion.includes(term));
+}
+
+async function getVoiceAvailability(
+	env: AppBindings,
+	args: Record<string, unknown>,
+): Promise<{
+	message: string;
+	slots: Array<{
+		option: number;
+		label: string;
+		startTime: string;
+		endTime: string;
+		timezone: string;
+	}>;
+}> {
+	const availability = await getAvailability(env, {
+		days: asNumber(args.days) ?? 7,
+		durationMinutes: asNumber(args.durationMinutes) ?? 30,
+		timezone: asString(args.timezone) ?? env.GOOGLE_DEFAULT_TIMEZONE ?? "Asia/Kolkata",
+	});
+
+	const proposedSlots = selectPrivacyPreservingSlots(availability.slots);
+
+	return {
+		message:
+			proposedSlots.length > 0
+				? "I checked Vansh's calendar and found a few available options. Ask the caller which one works best."
+				: "I could not find any available 30-minute slots in the next few days.",
+		slots: proposedSlots.map((slot, index) => ({
+			option: index + 1,
+			label: slot.label,
+			startTime: slot.startTime,
+			endTime: slot.endTime,
+			timezone: slot.timezone,
+		})),
+	};
+}
+
+async function bookVoiceCall(
+	env: AppBindings,
+	args: Record<string, unknown>,
+): Promise<string> {
+	const startTime = asString(args.startTime);
+	const endTime = asString(args.endTime);
+	const timezone = asString(args.timezone) ?? env.GOOGLE_DEFAULT_TIMEZONE ?? "Asia/Kolkata";
+	const guestName = asString(args.guestName) ?? "Guest";
+	const guestEmail = asString(args.guestEmail);
+
+	if (!startTime || !endTime) {
+		return "I need the selected start time and end time before I can book the call.";
+	}
+
+	if (!guestEmail) {
+		return "I need the caller's email address before I can send the calendar invite.";
+	}
+
+	const booking = await bookCalendarEvent(env, {
+		startTime,
+		endTime,
+		timezone,
+		guestName,
+		guestEmail,
+		notes: "Booked from the Vapi voice agent.",
+	});
+
+	return `Confirmed. I booked the call for ${formatSlotLabel(
+		booking.startTime,
+		booking.endTime,
+		booking.timezone,
+	)} and sent a calendar invite to ${guestEmail}.`;
+}
+
+function extractToolCalls(body: unknown): ToolCall[] {
+	const root = asRecord(body);
+	const message = asRecord(root.message);
+
+	const rawToolCalls =
+		asArray(message.toolCallList) ??
+		asArray(message.toolCalls) ??
+		asArray(root.toolCallList) ??
+		asArray(root.toolCalls) ??
+		[];
+
+	return rawToolCalls
+		.map((value, index): ToolCall | null => {
+			const rawToolCall = asRecord(value);
+			const rawFunction = asRecord(rawToolCall.function);
+
+			const id =
+				asString(rawToolCall.id) ??
+				asString(rawToolCall.toolCallId) ??
+				`tool-call-${index + 1}`;
+
+			const name =
+				asString(rawToolCall.name) ??
+				asString(rawFunction.name) ??
+				asString(rawToolCall.toolName) ??
+				"";
+
+			const args =
+				parseArguments(rawToolCall.arguments) ??
+				parseArguments(rawFunction.arguments) ??
+				parseArguments(rawFunction.parameters) ??
+				{};
+
+			if (!name) {
+				return null;
+			}
+
+			return {
+				id,
+				name,
+				arguments: args,
+			};
+		})
+		.filter((toolCall): toolCall is ToolCall => toolCall !== null);
+}
+
+function parseArguments(value: unknown): Record<string, unknown> | null {
+	if (!value) {
+		return null;
+	}
+
+	if (typeof value === "string") {
+		try {
+			const parsed = JSON.parse(value);
+			return asRecord(parsed);
+		} catch {
+			return null;
+		}
+	}
+
+	return asRecord(value);
+}
+
+function selectPrivacyPreservingSlots(slots: AvailabilitySlot[]): AvailabilitySlot[] {
+	if (slots.length <= 3) {
+		return slots;
+	}
+
+	const selected: AvailabilitySlot[] = [];
+	const usedDates = new Set<string>();
+
+	for (const slot of slots) {
+		const dateKey = slot.startTime.slice(0, 10);
+
+		if (usedDates.has(dateKey)) {
+			continue;
+		}
+
+		selected.push(slot);
+		usedDates.add(dateKey);
+
+		if (selected.length === 3) {
+			return selected;
+		}
+	}
+
+	for (const index of [0, Math.floor(slots.length / 2), slots.length - 1]) {
+		const slot = slots[index];
+
+		if (slot && !selected.some((selectedSlot) => selectedSlot.startTime === slot.startTime)) {
+			selected.push(slot);
+		}
+
+		if (selected.length === 3) {
+			break;
+		}
+	}
+
+	return selected;
+}
+
+function formatSlotLabel(startTime: string, endTime: string, timezone: string): string {
+	const start = new Date(startTime);
+	const end = new Date(endTime);
+
+	const startFormatter = new Intl.DateTimeFormat("en-IN", {
+		timeZone: timezone,
+		weekday: "short",
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+		hour12: true,
+	});
+
+	const endFormatter = new Intl.DateTimeFormat("en-IN", {
+		timeZone: timezone,
+		hour: "numeric",
+		minute: "2-digit",
+		hour12: true,
+	});
+
+	return `${startFormatter.format(start)} - ${endFormatter.format(end)}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? value as Record<string, unknown>
+		: {};
+}
+
+function asArray(value: unknown): unknown[] | null {
+	return Array.isArray(value) ? value : null;
+}
+
+function asString(value: unknown): string | null {
+	return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function asNumber(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
