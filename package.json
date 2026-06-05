@@ -14,7 +14,8 @@
   "dependencies": {
     "hono": "4.12.23",
     "react": "19.2.1",
-    "react-dom": "19.2.1"
+    "react-dom": "19.2.1",
+    "@google/genai": "^1.33.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.40.0",
@@ -45,7 +46,12 @@
     "test:ingestion": "node --test scripts/ingest/lib/*.test.mjs",
     "ingest:resume:preview": "node scripts/ingest/prepare-resume-corpus.mjs",
     "ingest:github:preview": "node scripts/ingest/prepare-github-corpus.mjs",
-    "ingest:corpus:prepare-sql": "node scripts/ingest/prepare-development-corpus-sql.mjs"
+    "ingest:corpus:prepare-sql": "node scripts/ingest/prepare-development-corpus-sql.mjs",
+    "retrieval:exact:smoke": "node scripts/ingest/smoke-exact-search.mjs",
+    "vector:chunks:export": "node scripts/embedding/export-development-chunks.mjs",
+    "vector:embeddings:generate": "node scripts/embedding/generate-development-embeddings.mjs",
+    "vector:upsert:dev": "node scripts/embedding/upsert-development-vectors.mjs",
+    "vector:semantic:smoke": "node scripts/embedding/smoke-vector-search.mjs"
   },
   "type": "module"
 }

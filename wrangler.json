@@ -37,6 +37,12 @@
 					"database_id": "01baea77-276d-4462-9e78-d34a7bff1cf5",
 					"migrations_dir": "migrations"
 				}
+			],
+			"vectorize": [
+				{
+					"binding": "VECTORIZE",
+					"index_name": "persona-vectors-dev"
+				}
 			]
 		}
 	},

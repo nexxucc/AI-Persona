@@ -1,9 +1,9 @@
 /**
  * Runtime bindings supplied to the Cloudflare Worker.
  *
- * Resource bindings such as D1 are generated into `Env` from `wrangler.json`.
- * Secrets are configured through `.dev.vars` locally and Worker secrets in
- * deployed environments.
+ * Resource bindings such as D1 and Vectorize are generated into `Env` from
+ * `wrangler.json`. Secrets are configured through `.dev.vars` locally and
+ * Worker secrets in deployed environments.
  */
 export type AppBindings = Env & {
 	APP_ENV: "development" | "production";
