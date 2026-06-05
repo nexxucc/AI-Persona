@@ -15,14 +15,19 @@ import {
 	fetchRepositoryReadme,
 	fetchRepositoryTree,
 	getGitHubToken,
+	getRepositoryOverride,
 	isLowSignalRepository,
 	selectEvidenceTreeEntries,
 } from "./lib/github.mjs";
 
 const manifestPath = "sources/source-manifest.json";
+const repositoryOverridesPath = "sources/github-repository-overrides.json";
 const outputPath = "local-data/generated/github-corpus-preview.json";
 
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+const repositoryOverrides = await readOptionalJson(repositoryOverridesPath, {
+	repositories: {},
+});
 const owner = manifest.github?.owner;
 
 if (!owner) {
@@ -43,6 +48,7 @@ const warnings = [];
 const repoReports = [];
 
 for (const repository of repositories) {
+	const repositoryOverride = getRepositoryOverride(repository, repositoryOverrides);
 	let readme = null;
 	let treeEntries = [];
 	let selectedEntries = [];
@@ -124,14 +130,19 @@ for (const repository of repositories) {
 			sourceKey: `github:${repository.full_name}:metadata`,
 			publicUrl: repository.html_url,
 			title: `${repository.full_name} Repository Metadata`,
-			content: createRepositoryMetadataMarkdown(repository, contributors),
+			content: createRepositoryMetadataMarkdown(
+				repository,
+				contributors,
+				repositoryOverride,
+			),
 			repository,
 			metadata: {
 				fork: repository.fork,
 				archived: repository.archived,
 				language: repository.language,
 				default_branch: repository.default_branch,
-				low_signal: isLowSignalRepository(repository),
+				low_signal: isLowSignalRepository(repository, repositoryOverride),
+				curation: repositoryOverride,
 				contributor_count: contributors.length,
 			},
 		}),
@@ -150,6 +161,7 @@ for (const repository of repositories) {
 				commits,
 				commitDetails,
 				contributors,
+				override: repositoryOverride,
 			}),
 			repository,
 			metadata: {
@@ -157,7 +169,8 @@ for (const repository of repositories) {
 				archived: repository.archived,
 				language: repository.language,
 				default_branch: repository.default_branch,
-				low_signal: isLowSignalRepository(repository),
+				low_signal: isLowSignalRepository(repository, repositoryOverride),
+				curation: repositoryOverride,
 				selected_file_count: selectedEntries.length,
 				commit_count: commits.length,
 				commit_detail_count: commitDetails.length,
@@ -180,7 +193,8 @@ for (const repository of repositories) {
 					fork: repository.fork,
 					archived: repository.archived,
 					default_branch: repository.default_branch,
-					low_signal: isLowSignalRepository(repository),
+					low_signal: isLowSignalRepository(repository, repositoryOverride),
+				curation: repositoryOverride,
 				},
 			}),
 		);
@@ -207,7 +221,8 @@ for (const repository of repositories) {
 						fork: repository.fork,
 						archived: repository.archived,
 						default_branch: repository.default_branch,
-						low_signal: isLowSignalRepository(repository),
+						low_signal: isLowSignalRepository(repository, repositoryOverride),
+				curation: repositoryOverride,
 						size_bytes: entry.size ?? null,
 						path_priority: entry.path,
 					},
@@ -235,7 +250,8 @@ for (const repository of repositories) {
 					fork: repository.fork,
 					archived: repository.archived,
 					default_branch: repository.default_branch,
-					low_signal: isLowSignalRepository(repository),
+					low_signal: isLowSignalRepository(repository, repositoryOverride),
+				curation: repositoryOverride,
 					commit_count: commits.length,
 					commit_detail_count: commitDetails.length,
 				},
@@ -251,7 +267,11 @@ for (const repository of repositories) {
 		default_branch: repository.default_branch,
 		language: repository.language,
 		public_url: repository.html_url,
-		low_signal: isLowSignalRepository(repository),
+		low_signal: isLowSignalRepository(repository, repositoryOverride),
+		status: repositoryOverride?.status ?? "unreviewed",
+		priority: repositoryOverride?.priority ?? "medium",
+		canonical_repository: repositoryOverride?.canonical_repository ?? null,
+		curation_notes: repositoryOverride?.notes ?? "",
 		selected_file_count: selectedEntries.length,
 		commit_count: commits.length,
 		commit_detail_count: commitDetails.length,
@@ -297,5 +317,17 @@ if (warnings.length > 0) {
 	console.log("Warnings:");
 	for (const warning of warnings) {
 		console.log(`- ${warning.repository} ${warning.source}: ${warning.message}`);
+	}
+}
+
+async function readOptionalJson(path, fallback) {
+	try {
+		return JSON.parse(await readFile(path, "utf8"));
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+			return fallback;
+		}
+
+		throw error;
 	}
 }

@@ -386,7 +386,7 @@ export async function fetchRawTextFile(repository, filePath) {
 	return response.text();
 }
 
-export function createRepositoryMetadataMarkdown(repository, contributors = []) {
+export function createRepositoryMetadataMarkdown(repository, contributors = [], override = null) {
 	const lines = [
 		`# ${repository.full_name}`,
 		"",
@@ -408,6 +408,20 @@ export function createRepositoryMetadataMarkdown(repository, contributors = []) 
 
 	if (Array.isArray(repository.topics) && repository.topics.length > 0) {
 		lines.push(`- Topics: ${repository.topics.join(", ")}`);
+	}
+
+	if (override) {
+		lines.push("", "## Repository Curation", "");
+		lines.push(`- Status: ${override.status ?? "unreviewed"}`);
+		lines.push(`- Priority: ${override.priority ?? "medium"}`);
+
+		if (override.canonical_repository) {
+			lines.push(`- Canonical repository: ${override.canonical_repository}`);
+		}
+
+		if (override.notes) {
+			lines.push(`- Notes: ${override.notes}`);
+		}
 	}
 
 	if (contributors.length > 0) {
@@ -434,6 +448,7 @@ export function createRepositoryEvidenceSummaryMarkdown({
 	commits,
 	commitDetails,
 	contributors,
+	override = null,
 }) {
 	const lines = [
 		`# ${repository.full_name} Evidence Summary`,
@@ -454,7 +469,20 @@ export function createRepositoryEvidenceSummaryMarkdown({
 		lines.push(`- README indexed: ${readme.path}`);
 	}
 
-	if (isLowSignalRepository(repository)) {
+	if (override) {
+		lines.push(`- Curated status: ${override.status ?? "unreviewed"}`);
+		lines.push(`- Curated priority: ${override.priority ?? "medium"}`);
+
+		if (override.canonical_repository) {
+			lines.push(`- Canonical repository: ${override.canonical_repository}`);
+		}
+
+		if (override.notes) {
+			lines.push(`- Curation notes: ${override.notes}`);
+		}
+	}
+
+	if (isLowSignalRepository(repository, override)) {
 		lines.push(`- Low signal repository: Yes`);
 	}
 
@@ -464,6 +492,20 @@ export function createRepositoryEvidenceSummaryMarkdown({
 		lines.push(
 			`- ${entry.path} | type: ${classifyEvidenceSourceType(entry.path)} | size: ${entry.size ?? "unknown"} bytes`,
 		);
+	}
+
+	if (override) {
+		lines.push("", "## Repository Curation", "");
+		lines.push(`- Status: ${override.status ?? "unreviewed"}`);
+		lines.push(`- Priority: ${override.priority ?? "medium"}`);
+
+		if (override.canonical_repository) {
+			lines.push(`- Canonical repository: ${override.canonical_repository}`);
+		}
+
+		if (override.notes) {
+			lines.push(`- Notes: ${override.notes}`);
+		}
 	}
 
 	if (contributors.length > 0) {
@@ -539,7 +581,25 @@ export function createCommitHistoryMarkdown(repository, commits, commitDetails =
 	return `${lines.join("\n")}\n`;
 }
 
-export function isLowSignalRepository(repository) {
+export function getRepositoryOverride(repository, overrides = {}) {
+	return (
+		overrides.repositories?.[repository.name] ??
+		overrides.repositories?.[repository.full_name] ??
+		null
+	);
+}
+
+export function isLowSignalRepository(repository, override = null) {
+	if (
+		override?.status === "low_signal" ||
+		override?.status === "exclude_from_general_answers" ||
+		override?.status === "duplicate" ||
+		override?.status === "non_working_copy" ||
+		override?.priority === "exclude_from_general_answers"
+	) {
+		return true;
+	}
+
 	return lowSignalRepositoryPatterns.some((pattern) => pattern.test(repository.name));
 }
 
