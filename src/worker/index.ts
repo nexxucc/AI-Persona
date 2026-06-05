@@ -41,7 +41,7 @@ app.post("/api/retrieval/search", async (c) => {
 
 
 app.post("/api/chat", async (c) => {
-	const body = await c.req.json<{ message?: string }>().catch(() => null);
+	const body = await c.req.json<{ message?: string; conversationId?: string }>().catch(() => null);
 	const message = body?.message?.trim();
 
 	if (!message) {
@@ -54,7 +54,7 @@ app.post("/api/chat", async (c) => {
 		c.env.GEMINI_API_KEY,
 		message,
 		{
-			finalLimit: 8,
+			finalLimit: 5,
 		},
 	);
 
