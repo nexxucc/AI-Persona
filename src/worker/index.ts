@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { getAvailability, bookCalendarEvent } from "./calendar/googleCalendar";
+import { handleCalendarChatMessage } from "./chat/calendarIntent";
 import { generateGroundedAnswer } from "./chat/groundedAnswer";
 import { retrieveHybridEvidence } from "./retrieval/hybridRetrieval";
 import type { HealthResponse } from "../shared/types/health";
@@ -72,6 +73,16 @@ app.post("/api/chat", async (c) => {
 
 	if (!message) {
 		return c.json({ error: "A non-empty message is required." }, 400);
+	}
+
+	const calendarResponse = await handleCalendarChatMessage(
+		c.env,
+		message,
+		body?.conversationId,
+	);
+
+	if (calendarResponse) {
+		return c.json(calendarResponse);
 	}
 
 	const evidence = await retrieveHybridEvidence(
