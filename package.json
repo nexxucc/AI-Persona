@@ -44,7 +44,8 @@
     "check:content": "node scripts/validate-content-standards.mjs",
     "test:ingestion": "node --test scripts/ingest/lib/*.test.mjs",
     "ingest:resume:preview": "node scripts/ingest/prepare-resume-corpus.mjs",
-    "ingest:github:preview": "node scripts/ingest/prepare-github-corpus.mjs"
+    "ingest:github:preview": "node scripts/ingest/prepare-github-corpus.mjs",
+    "ingest:corpus:prepare-sql": "node scripts/ingest/prepare-development-corpus-sql.mjs"
   },
   "type": "module"
 }
