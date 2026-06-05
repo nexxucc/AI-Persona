@@ -1,39 +1,12 @@
 import { embedQuery } from "../ai/embedding";
-import type { EvidenceResult, EvidenceSourceType } from "./types";
-
-type VectorMetadata = {
-	chunk_id?: string;
-	source_type?: EvidenceSourceType;
-	repository_name?: string | null;
-	file_path?: string | null;
-	title?: string;
-	public_url?: string;
-};
-
-type VectorizeMatch = {
-	id: string;
-	score: number;
-	metadata?: VectorMetadata;
-};
-
-type SourceChunkRow = {
-	chunk_id: string;
-	document_id: string;
-	title: string;
-	source_type: EvidenceSourceType;
-	repository_name: string | null;
-	file_path: string | null;
-	commit_sha: string | null;
-	public_url: string;
-	content: string;
-};
+import type { EvidenceResult } from "./types";
 
 export type SemanticSearchOptions = {
 	limit?: number;
 };
 
 const DEFAULT_LIMIT = 8;
-const MAX_LIMIT = 12;
+const MAX_LIMIT = 20;
 
 export async function searchSemanticEvidence(
 	db: D1Database,
@@ -48,63 +21,24 @@ export async function searchSemanticEvidence(
 		return [];
 	}
 
+	const embedding = await embedQuery(geminiApiKey, normalizedQuery);
 	const limit = clampLimit(options.limit);
-	const queryVector = await embedQuery(geminiApiKey, normalizedQuery);
 
-	const vectorResults = await vectorize.query(queryVector, {
+	const vectorMatches = await vectorize.query(embedding, {
 		topK: limit,
-		returnMetadata: "all",
+		returnMetadata: true,
 	});
 
-	const matches = ((vectorResults.matches ?? []) as VectorizeMatch[]).filter(
-		(match) => typeof match.metadata?.chunk_id === "string",
-	);
+	const chunkIds = vectorMatches.matches
+		.map((match) => String(match.metadata?.chunk_id ?? ""))
+		.filter(Boolean);
 
-	if (matches.length === 0) {
-		return [];
-	}
-
-	const chunkIds = matches.map((match) => match.metadata?.chunk_id as string);
-	const chunks = await fetchChunksByIds(db, chunkIds);
-	const chunksById = new Map(chunks.map((chunk) => [chunk.chunk_id, chunk]));
-
-	return matches
-		.map((match): EvidenceResult | null => {
-			const chunkId = match.metadata?.chunk_id as string;
-			const chunk = chunksById.get(chunkId);
-
-			if (!chunk) {
-				return null;
-			}
-
-			return {
-				chunkId: chunk.chunk_id,
-				documentId: chunk.document_id,
-				title: chunk.title,
-				sourceType: chunk.source_type,
-				repositoryName: chunk.repository_name,
-				filePath: chunk.file_path,
-				commitSha: chunk.commit_sha,
-				publicUrl: chunk.public_url,
-				content: chunk.content,
-				score: match.score,
-				retrievalMode: "semantic",
-			};
-		})
-		.filter((result): result is EvidenceResult => result !== null);
-}
-
-async function fetchChunksByIds(
-	db: D1Database,
-	chunkIds: string[],
-): Promise<SourceChunkRow[]> {
 	if (chunkIds.length === 0) {
 		return [];
 	}
 
 	const placeholders = chunkIds.map(() => "?").join(", ");
-
-	const result = await db
+	const rows = await db
 		.prepare(
 			`
 			SELECT
@@ -116,15 +50,55 @@ async function fetchChunksByIds(
 				file_path,
 				commit_sha,
 				public_url,
-				content
+				content,
+				source_chunks.metadata_json AS metadata_json AS metadata
 			FROM source_chunks
-			WHERE id IN (${placeholders})
+			WHERE source_chunks.id IN (${placeholders});
 			`,
 		)
 		.bind(...chunkIds)
-		.all<SourceChunkRow>();
+		.all<{
+			chunk_id: string;
+			document_id: string;
+			title: string;
+			source_type: EvidenceResult["sourceType"];
+			repository_name: string | null;
+			file_path: string | null;
+			commit_sha: string | null;
+			public_url: string;
+			content: string;
+			metadata: string | null;
+		}>();
 
-	return result.results ?? [];
+	const rowsByChunkId = new Map(
+		rows.results.map((row) => [row.chunk_id, row]),
+	);
+
+	return vectorMatches.matches
+		.map((match): EvidenceResult | null => {
+			const chunkId = String(match.metadata?.chunk_id ?? "");
+			const row = rowsByChunkId.get(chunkId);
+
+			if (!row) {
+				return null;
+			}
+
+			return {
+				chunkId: row.chunk_id,
+				documentId: row.document_id,
+				title: row.title,
+				sourceType: row.source_type,
+				repositoryName: row.repository_name,
+				filePath: row.file_path,
+				commitSha: row.commit_sha,
+				publicUrl: row.public_url,
+				content: row.content,
+				score: match.score,
+				retrievalMode: "semantic",
+				metadata: parseMetadata(row.metadata),
+			};
+		})
+		.filter((result): result is EvidenceResult => result !== null);
 }
 
 function clampLimit(limit: number | undefined): number {
@@ -133,4 +107,19 @@ function clampLimit(limit: number | undefined): number {
 	}
 
 	return Math.min(Math.max(limit, 1), MAX_LIMIT);
+}
+
+function parseMetadata(value: string | null | undefined): Record<string, unknown> {
+	if (!value) {
+		return {};
+	}
+
+	try {
+		const parsedValue = JSON.parse(value);
+		return parsedValue && typeof parsedValue === "object"
+			? parsedValue as Record<string, unknown>
+			: {};
+	} catch {
+		return {};
+	}
 }

@@ -18,4 +18,5 @@ export type EvidenceResult = {
 	content: string;
 	score: number;
 	retrievalMode: "exact" | "semantic" | "hybrid";
+	metadata?: Record<string, unknown>;
 };
