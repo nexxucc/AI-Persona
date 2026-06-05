@@ -8,9 +8,9 @@ const execFileAsync = promisify(execFile);
 const embeddingPath = "local-data/generated/development-embeddings.json";
 const payload = JSON.parse(await readFile(embeddingPath, "utf8"));
 
-if (payload.vector_count !== 1377 || payload.dimensions !== 768) {
+if (payload.vector_count !== 1412 || payload.dimensions !== 768) {
 	throw new Error(
-		`Expected 1377 vectors with 768 dimensions, received ${payload.vector_count} vectors with ${payload.dimensions} dimensions.`,
+		`Expected 1412 vectors with 768 dimensions, received ${payload.vector_count} vectors with ${payload.dimensions} dimensions.`,
 	);
 }
 
