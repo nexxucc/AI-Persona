@@ -1,50 +1,27 @@
-export type EvidenceSourceType =
-	| "resume"
-	| "github_repository"
-	| "github_readme"
-	| "github_document"
-	| "github_manifest"
-	| "github_commit";
-
-export type ExactEvidenceResult = {
-	chunkId: string;
-	documentId: string;
-	title: string;
-	sourceType: EvidenceSourceType;
-	repositoryName: string | null;
-	filePath: string | null;
-	commitSha: string | null;
-	publicUrl: string;
-	content: string;
-	score: number;
-};
+import type { EvidenceResult } from "./types";
 
 export type ExactSearchOptions = {
 	limit?: number;
 };
 
 const DEFAULT_LIMIT = 8;
-const MAX_LIMIT = 12;
+const MAX_LIMIT = 20;
 
 export async function searchExactEvidence(
 	db: D1Database,
 	query: string,
 	options: ExactSearchOptions = {},
-): Promise<ExactEvidenceResult[]> {
+): Promise<EvidenceResult[]> {
 	const normalizedQuery = query.trim();
 
 	if (!normalizedQuery) {
 		return [];
 	}
 
-	const limit = clampLimit(options.limit);
 	const ftsQuery = buildFtsQuery(normalizedQuery);
+	const limit = clampLimit(options.limit);
 
-	if (!ftsQuery) {
-		return [];
-	}
-
-	const result = await db
+	const rows = await db
 		.prepare(
 			`
 			SELECT
@@ -57,13 +34,14 @@ export async function searchExactEvidence(
 				source_chunks.commit_sha,
 				source_chunks.public_url,
 				source_chunks.content,
+				source_chunks.metadata_json AS metadata,
 				bm25(source_chunks_fts) AS score
 			FROM source_chunks_fts
 			JOIN source_chunks
 				ON source_chunks_fts.rowid = source_chunks.rowid
 			WHERE source_chunks_fts MATCH ?
-			ORDER BY score ASC
-			LIMIT ?
+			ORDER BY score
+			LIMIT ?;
 			`,
 		)
 		.bind(ftsQuery, limit)
@@ -71,16 +49,17 @@ export async function searchExactEvidence(
 			chunk_id: string;
 			document_id: string;
 			title: string;
-			source_type: EvidenceSourceType;
+			source_type: EvidenceResult["sourceType"];
 			repository_name: string | null;
 			file_path: string | null;
 			commit_sha: string | null;
 			public_url: string;
 			content: string;
+			metadata: string | null;
 			score: number;
 		}>();
 
-	return (result.results ?? []).map((row) => ({
+	return rows.results.map((row) => ({
 		chunkId: row.chunk_id,
 		documentId: row.document_id,
 		title: row.title,
@@ -91,28 +70,19 @@ export async function searchExactEvidence(
 		publicUrl: row.public_url,
 		content: row.content,
 		score: row.score,
+		retrievalMode: "exact",
+		metadata: parseMetadata(row.metadata),
 	}));
 }
 
-export function buildFtsQuery(query: string): string {
-	const terms = extractSearchTerms(query);
-
-	return terms.map((term) => `"${escapeFtsPhrase(term)}"`).join(" OR ");
-}
-
-export function extractSearchTerms(query: string): string[] {
-	const normalized = query
-		.replace(/[^\p{L}\p{N}_./+#-]+/gu, " ")
+function buildFtsQuery(query: string): string {
+	const quotedTerms = query
 		.split(/\s+/)
-		.map((term) => term.trim())
+		.map((term) => term.replace(/"/g, "").trim())
 		.filter(Boolean)
-		.filter((term) => term.length >= 2);
+		.map((term) => `"${term}"`);
 
-	return [...new Set(normalized)].slice(0, 12);
-}
-
-function escapeFtsPhrase(value: string): string {
-	return value.replaceAll('"', '""');
+	return quotedTerms.length > 0 ? quotedTerms.join(" OR ") : `"${query}"`;
 }
 
 function clampLimit(limit: number | undefined): number {
@@ -121,4 +91,19 @@ function clampLimit(limit: number | undefined): number {
 	}
 
 	return Math.min(Math.max(limit, 1), MAX_LIMIT);
+}
+
+function parseMetadata(value: string | null | undefined): Record<string, unknown> {
+	if (!value) {
+		return {};
+	}
+
+	try {
+		const parsedValue = JSON.parse(value);
+		return parsedValue && typeof parsedValue === "object"
+			? parsedValue as Record<string, unknown>
+			: {};
+	} catch {
+		return {};
+	}
 }

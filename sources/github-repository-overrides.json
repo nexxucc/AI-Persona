@@ -91,9 +91,9 @@
       "notes": ""
     },
     "graha-s-cana": {
-      "status": "canonical",
-      "priority": "high",
-      "canonical_repository": null,
+      "status": "non_working_copy",
+      "priority": "exclude_from_general_answers",
+      "canonical_repository": "ChandraQuant-Siddhanta",
       "notes": ""
     },
     "Portfolio": {
