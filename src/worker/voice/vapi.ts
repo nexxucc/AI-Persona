@@ -124,109 +124,19 @@ async function generateVoiceGroundedAnswer(
 	question: string,
 	evidence: EvidenceResult[],
 ): Promise<string> {
-	const evidenceText = formatVoiceEvidence(evidence, 6000);
+	const evidenceText = formatVoiceEvidence(evidence, 3500);
 
 	if (!evidenceText) {
 		return "I do not have enough retrieved evidence to answer that reliably.";
 	}
 
-	const firstAnswer = await requestVoiceAnswer(apiKey, question, evidenceText);
+	const answer = await requestVoiceAnswer(apiKey, question, evidenceText);
 
-	if (isUsableVoiceAnswer(firstAnswer)) {
-		return sanitizeVoiceAnswer(firstAnswer);
-	}
-
-	const compactEvidenceText = formatVoiceEvidence(evidence, 3000);
-	const retryAnswer = await requestVoiceAnswer(apiKey, question, compactEvidenceText);
-
-	if (isUsableVoiceAnswer(retryAnswer)) {
-		return sanitizeVoiceAnswer(retryAnswer);
+	if (isUsableVoiceAnswer(answer)) {
+		return sanitizeVoiceAnswer(answer);
 	}
 
 	return createVoiceEvidenceFallback(evidence);
-}
-
-async function requestVoiceAnswer(
-	apiKey: string,
-	question: string,
-	evidenceText: string,
-): Promise<string | null> {
-	const prompt = [
-		"You are generating a short spoken answer for Vansh Jain's AI representative.",
-		"Use only the evidence below.",
-		"Speak in third person: say Vansh, he, or his.",
-		"Do not use I, me, my, or mine when referring to Vansh.",
-		"Do not mention citations, chunk IDs, source titles, or internal retrieval details.",
-		"Return one complete paragraph of 3 to 5 complete sentences.",
-		"The answer must be complete and must not stop mid-sentence.",
-		"Begin directly with the answer. Do not add markdown bullets.",
-		"If the evidence is not enough, say that the available evidence does not verify the answer reliably.",
-		"",
-		"Question:",
-		question,
-		"",
-		"Evidence:",
-		evidenceText,
-	].join("\n");
-
-	const response = await fetch(
-		`https://generativelanguage.googleapis.com/v1beta/models/${VOICE_ANSWER_MODEL}:generateContent?key=${apiKey}`,
-		{
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				contents: [
-					{
-						role: "user",
-						parts: [
-							{
-								text: prompt,
-							},
-						],
-					},
-				],
-				generationConfig: {
-					temperature: 0.15,
-					topP: 0.8,
-					maxOutputTokens: 320,
-				},
-			}),
-		},
-	);
-
-	if (!response.ok) {
-		return null;
-	}
-
-	const data = await response.json<GeminiGenerateContentResponse>();
-	const answer = data.candidates?.[0]?.content?.parts
-		?.map((part) => part.text ?? "")
-		.join("")
-		.trim();
-
-	return answer || null;
-}
-
-function isUsableVoiceAnswer(answer: string | null): answer is string {
-	if (!answer) {
-		return false;
-	}
-
-	const normalized = answer.replace(/\s+/g, " ").trim();
-
-	if (normalized.length < 80) {
-		return false;
-	}
-
-	if (!/[.!?]$/.test(normalized)) {
-		return false;
-	}
-
-	return !/\b(for|and|or|with|because|including|using|such as|as|to|in|at|by)$/i.test(
-		normalized,
-	);
 }
 
 
@@ -272,18 +182,82 @@ function sanitizeVoiceAnswer(answer: string): string {
 }
 
 function createVoiceEvidenceFallback(evidence: EvidenceResult[]): string {
-	const hasResumeEvidence = evidence.some((item) => item.sourceType === "resume");
-	const hasProjectEvidence = evidence.some((item) => item.sourceType !== "resume");
+	const highlights = selectVoiceEvidenceHighlights(evidence, 3);
 
-	if (hasResumeEvidence && hasProjectEvidence) {
-		return "I found relevant resume and project evidence for this, but I cannot generate a complete spoken answer right now. Please ask again in a moment.";
+	if (highlights.length >= 2) {
+		return [
+			"Vansh appears to be a strong fit for an AI or software engineering role based on the retrieved resume and project evidence.",
+			`The evidence highlights ${highlights[0]}.`,
+			`It also mentions ${highlights[1]}.`,
+			highlights[2] ? `Another relevant point is ${highlights[2]}.` : "",
+			"Together, this shows practical experience across software implementation, applied AI, and machine learning work.",
+		]
+			.filter(Boolean)
+			.join(" ");
 	}
 
-	if (hasResumeEvidence) {
-		return "I found relevant resume evidence for this, but I cannot generate a complete spoken answer right now. Please ask again in a moment.";
+	if (highlights.length === 1) {
+		return `Vansh appears relevant for an AI or software engineering role based on the retrieved evidence. The evidence highlights ${highlights[0]}. I would avoid adding more detail unless more supporting evidence is retrieved.`;
 	}
 
 	return "I found some relevant evidence for this, but I cannot answer it reliably right now.";
+}
+
+function selectVoiceEvidenceHighlights(
+	evidence: EvidenceResult[],
+	limit: number,
+): string[] {
+	const highlights: string[] = [];
+	const seen = new Set<string>();
+
+	const keywordPattern =
+		/\b(built|developed|engineered|implemented|integrated|created|worked|experience|intern|project|ai|ml|machine learning|software|pipeline|system|application|model|evaluation|testing|debugging|frontend|backend)\b/i;
+
+	for (const item of evidence) {
+		const candidates = item.content
+			.split(/\n|(?<=\.)\s+/)
+			.map(cleanVoiceHighlight)
+			.filter(Boolean);
+
+		for (const candidate of candidates) {
+			const normalized = candidate.toLowerCase();
+
+			if (seen.has(normalized)) {
+				continue;
+			}
+
+			if (!keywordPattern.test(candidate)) {
+				continue;
+			}
+
+			if (candidate.length < 35) {
+				continue;
+			}
+
+			seen.add(normalized);
+			highlights.push(candidate);
+
+			if (highlights.length >= limit) {
+				return highlights;
+			}
+		}
+	}
+
+	return highlights;
+}
+
+function cleanVoiceHighlight(value: string): string {
+	return value
+		.replace(/^[\s\-•*→]+/, "")
+		.replace(/\[[^\]]+\]\([^)]+\)/g, "")
+		.replace(/https?:\/\/\S+/g, "")
+		.replace(/[`*_#>]/g, "")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 220)
+		.replace(/\s+\S*$/, "")
+		.replace(/[,:;]+$/, "")
+		.trim();
 }
 
 
