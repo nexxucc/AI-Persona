@@ -481,15 +481,36 @@ async function retrieveVoiceEvidence(
 		]).slice(0, 14);
 	}
 
-	return retrieveHybridEvidence(
+	const evidence = await retrieveHybridEvidence(
 		env.DB,
 		env.VECTORIZE,
 		env.GEMINI_API_KEY,
 		buildVoiceRetrievalQuery(question),
 		{
-			finalLimit: 8,
+			finalLimit: isProjectQuestion(normalizedQuestion) ? 10 : 8,
 		},
 	);
+
+	if (!isProjectQuestion(normalizedQuestion)) {
+		return evidence;
+	}
+
+	const repositoryNames = getRepositoryNamesFromEvidence(evidence);
+
+	if (repositoryNames.length === 0) {
+		return evidence;
+	}
+
+	const relatedRepositoryEvidence = await fetchRepositoryEvidenceByNames(
+		env,
+		repositoryNames,
+		12,
+	);
+
+	return mergeEvidenceResults([
+		...evidence,
+		...relatedRepositoryEvidence,
+	]).slice(0, 14);
 }
 
 
@@ -572,6 +593,91 @@ async function fetchResumeEvidence(
 		publicUrl: row.public_url,
 		content: row.content,
 		score: 100 - index,
+		retrievalMode: "exact",
+		metadata: parseMetadata(row.metadata),
+	}));
+}
+
+function getRepositoryNamesFromEvidence(evidence: EvidenceResult[]): string[] {
+	const repositoryNames = new Set<string>();
+
+	for (const item of evidence) {
+		if (item.repositoryName) {
+			repositoryNames.add(item.repositoryName);
+		}
+
+		if (repositoryNames.size >= 2) {
+			break;
+		}
+	}
+
+	return [...repositoryNames];
+}
+
+async function fetchRepositoryEvidenceByNames(
+	env: AppBindings,
+	repositoryNames: string[],
+	limit: number,
+): Promise<EvidenceResult[]> {
+	if (repositoryNames.length === 0) {
+		return [];
+	}
+
+	const placeholders = repositoryNames.map(() => "?").join(", ");
+
+	const rows = await env.DB
+		.prepare(
+			`
+			SELECT
+				id AS chunk_id,
+				document_id,
+				title,
+				source_type,
+				repository_name,
+				file_path,
+				commit_sha,
+				public_url,
+				content,
+				metadata_json AS metadata
+			FROM source_chunks
+			WHERE repository_name IN (${placeholders})
+			ORDER BY
+				CASE source_type
+					WHEN 'github_readme' THEN 0
+					WHEN 'github_manifest' THEN 1
+					WHEN 'github_repository' THEN 2
+					WHEN 'github_document' THEN 3
+					ELSE 4
+				END,
+				chunk_index ASC
+			LIMIT ?
+			`,
+		)
+		.bind(...repositoryNames, limit)
+		.all<{
+			chunk_id: string;
+			document_id: string;
+			title: string;
+			source_type: EvidenceSourceType;
+			repository_name: string | null;
+			file_path: string | null;
+			commit_sha: string | null;
+			public_url: string;
+			content: string;
+			metadata: string | null;
+		}>();
+
+	return (rows.results ?? []).map((row, index) => ({
+		chunkId: row.chunk_id,
+		documentId: row.document_id,
+		title: row.title,
+		sourceType: row.source_type,
+		repositoryName: row.repository_name,
+		filePath: row.file_path,
+		commitSha: row.commit_sha,
+		publicUrl: row.public_url,
+		content: row.content,
+		score: 80 - index,
 		retrievalMode: "exact",
 		metadata: parseMetadata(row.metadata),
 	}));
