@@ -287,9 +287,11 @@ async function getVoiceAvailability(
 	args: Record<string, unknown>,
 ): Promise<{
 	message: string;
+	speechText: string;
 	slots: Array<{
 		option: number;
 		label: string;
+		spokenLabel: string;
 		startTime: string;
 		endTime: string;
 		timezone: string;
@@ -303,18 +305,27 @@ async function getVoiceAvailability(
 
 	const proposedSlots = selectPrivacyPreservingSlots(availability.slots);
 
+	const slots = proposedSlots.map((slot, index) => ({
+		option: index + 1,
+		label: slot.label,
+		spokenLabel: `Option ${index + 1}: ${slot.label.replace(" - ", " to ")} IST`,
+		startTime: slot.startTime,
+		endTime: slot.endTime,
+		timezone: slot.timezone,
+	}));
+
 	return {
 		message:
-			proposedSlots.length > 0
-				? "I checked Vansh's calendar and found a few available options. Ask the caller which one works best."
+			slots.length > 0
+				? "Read speechText exactly. Do not reorder, shorten, or paraphrase the slots."
 				: "I could not find any available 30-minute slots in the next few days.",
-		slots: proposedSlots.map((slot, index) => ({
-			option: index + 1,
-			label: slot.label,
-			startTime: slot.startTime,
-			endTime: slot.endTime,
-			timezone: slot.timezone,
-		})),
+		speechText:
+			slots.length > 0
+				? `I checked Vansh's calendar and found these options. ${slots
+						.map((slot) => slot.spokenLabel)
+						.join(". ")}. Which option works best for you?`
+				: "I could not find any available 30-minute slots in the next few days.",
+		slots,
 	};
 }
 
@@ -327,13 +338,18 @@ async function bookVoiceCall(
 	const timezone = asString(args.timezone) ?? env.GOOGLE_DEFAULT_TIMEZONE ?? "Asia/Kolkata";
 	const guestName = asString(args.guestName) ?? "Guest";
 	const guestEmail = asString(args.guestEmail);
+	const emailConfirmed = args.emailConfirmed === true;
 
 	if (!startTime || !endTime) {
 		return "I need the selected start time and end time before I can book the call.";
 	}
 
-	if (!guestEmail) {
-		return "I need the caller's email address before I can send the calendar invite.";
+	if (!guestEmail || !isValidEmail(guestEmail)) {
+		return "I need a valid email address before I can send the calendar invite. Please ask the caller to spell it clearly.";
+	}
+
+	if (!emailConfirmed) {
+		return `Before booking, read this email back to the caller exactly and ask for confirmation: ${guestEmail}`;
 	}
 
 	const booking = await bookCalendarEvent(env, {
@@ -345,11 +361,11 @@ async function bookVoiceCall(
 		notes: "Booked from the Vapi voice agent.",
 	});
 
-	return `Confirmed. I booked the call for ${formatSlotLabel(
+	return `Confirmed. The call is booked for ${formatSlotLabel(
 		booking.startTime,
 		booking.endTime,
 		booking.timezone,
-	)} and sent a calendar invite to ${guestEmail}.`;
+	)}. A calendar invite has been sent to ${guestEmail}.`;
 }
 
 function extractToolCalls(body: unknown): ToolCall[] {
@@ -451,6 +467,10 @@ function selectPrivacyPreservingSlots(slots: AvailabilitySlot[]): AvailabilitySl
 	}
 
 	return selected;
+}
+
+function isValidEmail(value: string): boolean {
+	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function formatSlotLabel(startTime: string, endTime: string, timezone: string): string {
