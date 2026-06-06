@@ -140,6 +140,94 @@ async function generateVoiceGroundedAnswer(
 }
 
 
+async function requestVoiceAnswer(
+	apiKey: string,
+	question: string,
+	evidenceText: string,
+): Promise<string | null> {
+	const prompt = [
+		"You are generating a short spoken answer for Vansh Jain's AI representative.",
+		"Use only the evidence below.",
+		"Speak in third person: say Vansh, he, or his.",
+		"Do not use I, me, my, or mine when referring to Vansh.",
+		"Do not mention citations, chunk IDs, source titles, or internal retrieval details.",
+		"Return one complete paragraph of 3 to 5 complete sentences.",
+		"The answer must be complete and must not stop mid-sentence.",
+		"Begin directly with the answer. Do not add markdown bullets.",
+		"If the evidence is not enough, say that the available evidence does not verify the answer reliably.",
+		"",
+		"Question:",
+		question,
+		"",
+		"Evidence:",
+		evidenceText,
+	].join("\n");
+
+	try {
+		const response = await fetch(
+			`https://generativelanguage.googleapis.com/v1beta/models/${VOICE_ANSWER_MODEL}:generateContent?key=${apiKey}`,
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					contents: [
+						{
+							role: "user",
+							parts: [
+								{
+									text: prompt,
+								},
+							],
+						},
+					],
+					generationConfig: {
+						temperature: 0.15,
+						topP: 0.8,
+						maxOutputTokens: 320,
+					},
+				}),
+			},
+		);
+
+		if (!response.ok) {
+			return null;
+		}
+
+		const data = (await response.json()) as GeminiGenerateContentResponse;
+		const answer = data.candidates?.[0]?.content?.parts
+			?.map((part) => part.text ?? "")
+			.join("")
+			.trim();
+
+		return answer || null;
+	} catch {
+		return null;
+	}
+}
+
+function isUsableVoiceAnswer(answer: string | null): answer is string {
+	if (!answer) {
+		return false;
+	}
+
+	const normalized = answer.replace(/\s+/g, " ").trim();
+
+	if (normalized.length < 80) {
+		return false;
+	}
+
+	if (!/[.!?]$/.test(normalized)) {
+		return false;
+	}
+
+	return !/\b(for|and|or|with|because|including|using|such as|as|to|in|at|by)$/i.test(
+		normalized,
+	);
+}
+
+
 function formatVoiceEvidence(evidence: EvidenceResult[], maxCharacters: number): string {
 	const selectedLines: string[] = [];
 	let usedCharacters = 0;
