@@ -102,10 +102,7 @@ async function answerQuestion(
 		evidence,
 	);
 
-	return [
-		"Use this as grounded information about Vansh. When speaking, phrase it as Vansh's AI representative, not as if you are Vansh himself.",
-		groundedAnswer.answer,
-	].join("\n\n");
+	return groundedAnswer.answer;
 }
 
 
