@@ -306,35 +306,63 @@ async function retrieveVoiceEvidence(
 	);
 
 	if (isCommitHistoryQuestion(normalizedQuestion)) {
-		const repositoryNames = getRepositoryNamesFromEvidence(baseEvidence);
-		const commitEvidence = await fetchCommitEvidenceByRepositoryNames(
-			env,
-			repositoryNames,
-			14,
-		);
+		let repositoryName = selectBestRepositoryName(question, baseEvidence);
+
+		if (!repositoryName) {
+			repositoryName = await findRepositoryNameByQuestion(env, question);
+		}
+
+		const commitEvidence = repositoryName
+			? await fetchCommitEvidenceByRepositoryNames(
+					env,
+					[repositoryName],
+					14,
+				)
+			: [];
+
+		const directCommitEvidence =
+			commitEvidence.length > 0
+				? []
+				: await fetchCommitEvidenceByQuestion(env, question, 14);
+
+		if (!repositoryName && directCommitEvidence.length === 0) {
+			return baseEvidence.slice(0, 4);
+		}
 
 		return mergeEvidenceResults([
 			...commitEvidence,
-			...baseEvidence,
+			...directCommitEvidence,
+			...(repositoryName ? filterEvidenceByRepository(baseEvidence, repositoryName) : []),
 		]).slice(0, 14);
 	}
 
 	if (isProjectQuestion(normalizedQuestion)) {
-		const repositoryNames = getRepositoryNamesFromEvidence(baseEvidence);
+		let repositoryName = selectBestRepositoryName(question, baseEvidence);
+
+		if (!repositoryName) {
+			repositoryName = await findRepositoryNameByQuestion(env, question);
+		}
+
+		if (!repositoryName) {
+			return baseEvidence.slice(0, 4);
+		}
+
 		const relatedRepositoryEvidence = await fetchRepositoryEvidenceByNames(
 			env,
-			repositoryNames,
+			[repositoryName],
 			14,
 		);
 
 		return mergeEvidenceResults([
-			...baseEvidence,
+			...filterEvidenceByRepository(baseEvidence, repositoryName),
 			...relatedRepositoryEvidence,
 		]).slice(0, 14);
 	}
 
 	return baseEvidence;
 }
+
+
 
 function buildVoiceGenerationQuestion(question: string): string {
 	const normalizedQuestion = question.toLowerCase();
@@ -680,11 +708,12 @@ function createVoiceEvidenceFallback(
 	evidence: EvidenceResult[],
 ): string {
 	const normalizedQuestion = question.toLowerCase();
-	const highlights = selectVoiceEvidenceHighlights(evidence, 4);
 
 	if (isCommitHistoryQuestion(normalizedQuestion)) {
-		const projectTitle = toSpokenProjectName(getBestEvidenceTitle(evidence));
-		const commitHighlights = selectCommitEvidenceHighlights(evidence, 4);
+		const scopedEvidence = getQuestionScopedProjectEvidence(question, evidence);
+		const commitScopedEvidence = scopedEvidence.length > 0 ? scopedEvidence : evidence;
+		const projectTitle = toSpokenProjectName(getBestEvidenceTitle(commitScopedEvidence));
+		const commitHighlights = selectCommitEvidenceHighlights(commitScopedEvidence, 4);
 
 		if (commitHighlights.length > 0) {
 			return [
@@ -696,11 +725,18 @@ function createVoiceEvidenceFallback(
 				.join(" ");
 		}
 
-		return `I do not have specific commit-history evidence for ${projectTitle} in the retrieved sources. I can still summarize the project itself from the available repository evidence.`;
+		return "I do not have reliable commit-history evidence for that project in the retrieved sources, so I should not guess.";
 	}
 
 	if (isProjectQuestion(normalizedQuestion)) {
-		const projectTitle = toSpokenProjectName(getBestEvidenceTitle(evidence));
+		const scopedEvidence = getQuestionScopedProjectEvidence(question, evidence);
+		const projectTitle = toSpokenProjectName(getBestEvidenceTitle(scopedEvidence));
+
+		if (!hasStrongProjectMatch(question, scopedEvidence)) {
+			return "I do not have enough reliable retrieved evidence to identify that project, so I should not guess or combine it with another portfolio item.";
+		}
+
+		const highlights = selectVoiceEvidenceHighlights(scopedEvidence, 4);
 
 		if (highlights.length >= 2) {
 			return [
@@ -719,6 +755,8 @@ function createVoiceEvidenceFallback(
 
 		return `I found retrieved evidence for ${projectTitle}, but I do not have enough detail to summarize it reliably.`;
 	}
+
+	const highlights = selectVoiceEvidenceHighlights(evidence, 4);
 
 	if (highlights.length >= 2) {
 		return [
@@ -742,6 +780,8 @@ function createVoiceEvidenceFallback(
 
 	return "I found some relevant evidence for this, but I cannot answer it reliably right now.";
 }
+
+
 
 function selectVoiceEvidenceHighlights(
 	evidence: EvidenceResult[],
@@ -902,6 +942,9 @@ function formatTechnicalTermsForSpeech(value: string): string {
 function isProjectQuestion(normalizedQuestion: string): boolean {
 	return [
 		"project",
+		"repository",
+		"repo",
+		"github",
 		"tell me about",
 		"explain",
 		"built",
@@ -909,8 +952,13 @@ function isProjectQuestion(normalizedQuestion: string): boolean {
 		"what did",
 		"how did",
 		"improve",
+		"tech stack",
+		"architecture",
+		"implementation",
 	].some((term) => normalizedQuestion.includes(term));
 }
+
+
 
 function isCommitHistoryQuestion(normalizedQuestion: string): boolean {
 	return [
@@ -953,28 +1001,14 @@ function isLikelyHeading(value: string): boolean {
 	return false;
 }
 
-function getRepositoryNamesFromEvidence(evidence: EvidenceResult[]): string[] {
-	const repositoryNames = new Set<string>();
-
-	for (const item of evidence) {
-		if (item.repositoryName) {
-			repositoryNames.add(item.repositoryName);
-		}
-
-		if (repositoryNames.size >= 2) {
-			break;
-		}
-	}
-
-	return [...repositoryNames];
-}
-
 function getBestEvidenceTitle(evidence: EvidenceResult[]): string {
 	const projectEvidence = evidence.find((item) => item.repositoryName);
 	const titledEvidence = projectEvidence ?? evidence.find((item) => item.title);
 
 	return titledEvidence?.repositoryName ?? titledEvidence?.title ?? "this project";
 }
+
+
 
 function toSpokenProjectName(value: string): string {
 	return value
@@ -1038,6 +1072,339 @@ function buildVoiceRetrievalQuery(question: string): string {
 
 	return question;
 }
+
+
+
+function getQuestionScopedProjectEvidence(
+	question: string,
+	evidence: EvidenceResult[],
+): EvidenceResult[] {
+	const repositoryName = selectBestRepositoryName(question, evidence);
+
+	if (!repositoryName) {
+		return [];
+	}
+
+	return filterEvidenceByRepository(evidence, repositoryName);
+}
+
+function hasStrongProjectMatch(
+	question: string,
+	evidence: EvidenceResult[],
+): boolean {
+	if (evidence.length === 0) {
+		return false;
+	}
+
+	const repositoryName = selectBestRepositoryName(question, evidence);
+
+	if (!repositoryName) {
+		return false;
+	}
+
+	return scoreRepositoryMatch(question, repositoryName) >= 5;
+}
+
+function filterEvidenceByRepository(
+	evidence: EvidenceResult[],
+	repositoryName: string,
+): EvidenceResult[] {
+	const normalizedRepositoryName = normalizeSearchText(repositoryName);
+
+	return evidence.filter((item) => {
+		if (item.repositoryName) {
+			return normalizeSearchText(item.repositoryName) === normalizedRepositoryName;
+		}
+
+		const normalizedTitle = normalizeSearchText(item.title);
+		return normalizedTitle.includes(normalizedRepositoryName);
+	});
+}
+
+function selectBestRepositoryName(
+	question: string,
+	evidence: EvidenceResult[],
+): string | null {
+	const candidates = new Map<string, number>();
+
+	for (const item of evidence) {
+		if (!item.repositoryName) {
+			continue;
+		}
+
+		const currentScore = candidates.get(item.repositoryName) ?? 0;
+		const score = Math.max(
+			currentScore,
+			scoreRepositoryMatch(question, item.repositoryName),
+			scoreRepositoryMatch(question, item.title),
+		);
+
+		candidates.set(item.repositoryName, score);
+	}
+
+	let bestRepositoryName: string | null = null;
+	let bestScore = 0;
+
+	for (const [repositoryName, score] of candidates.entries()) {
+		if (score > bestScore) {
+			bestRepositoryName = repositoryName;
+			bestScore = score;
+		}
+	}
+
+	return bestScore >= 5 ? bestRepositoryName : null;
+}
+
+function scoreRepositoryMatch(question: string, candidate: string): number {
+	const normalizedQuestion = normalizeSearchText(question);
+	const normalizedCandidate = normalizeSearchText(candidate);
+
+	if (!normalizedQuestion || !normalizedCandidate) {
+		return 0;
+	}
+
+	let score = 0;
+
+	if (
+		normalizedQuestion.includes(normalizedCandidate) ||
+		normalizedCandidate.includes(normalizedQuestion)
+	) {
+		score += 8;
+	}
+
+	const questionTokens = tokenizeSearchText(normalizedQuestion);
+	const candidateTokens = tokenizeSearchText(normalizedCandidate);
+
+	for (const questionToken of questionTokens) {
+		for (const candidateToken of candidateTokens) {
+			if (questionToken === candidateToken) {
+				score += 3;
+				continue;
+			}
+
+			if (
+				questionToken.length >= 5 &&
+				candidateToken.length >= 5 &&
+				(candidateToken.startsWith(questionToken) ||
+					questionToken.startsWith(candidateToken))
+			) {
+				score += 2;
+			}
+		}
+	}
+
+	return score;
+}
+
+function normalizeSearchText(value: string): string {
+	return value
+		.toLowerCase()
+		.replace(/[_-]/g, " ")
+		.replace(/[^a-z0-9\s]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function tokenizeSearchText(value: string): string[] {
+	const stopWords = new Set([
+		"tell",
+		"me",
+		"about",
+		"the",
+		"of",
+		"in",
+		"for",
+		"vansh",
+		"jain",
+		"github",
+		"repo",
+		"repository",
+		"project",
+		"commit",
+		"history",
+		"specific",
+		"specifically",
+	]);
+
+	return normalizeSearchText(value)
+		.split(" ")
+		.filter((token) => token.length >= 3 && !stopWords.has(token));
+}
+
+
+async function findRepositoryNameByQuestion(
+	env: AppBindings,
+	question: string,
+): Promise<string | null> {
+	const tokens = tokenizeSearchText(question).slice(0, 5);
+
+	if (tokens.length === 0) {
+		return null;
+	}
+
+	const tokenConditions = tokens
+		.map(
+			() =>
+				`(
+					lower(replace(replace(repository_name, '-', ' '), '_', ' ')) LIKE ?
+					OR lower(replace(replace(title, '-', ' '), '_', ' ')) LIKE ?
+					OR lower(public_url) LIKE ?
+				)`,
+		)
+		.join(" AND ");
+
+	const bindings = tokens.flatMap((token) => {
+		const pattern = `%${token}%`;
+		return [pattern, pattern, pattern];
+	});
+
+	const rows = await env.DB
+		.prepare(
+			`
+			SELECT
+				repository_name,
+				COUNT(*) AS match_count
+			FROM source_chunks
+			WHERE repository_name IS NOT NULL
+				AND ${tokenConditions}
+			GROUP BY repository_name
+			ORDER BY match_count DESC
+			LIMIT 1
+			`,
+		)
+		.bind(...bindings)
+		.all<{
+			repository_name: string | null;
+			match_count: number;
+		}>();
+
+	return rows.results?.[0]?.repository_name ?? null;
+}
+
+
+
+async function fetchCommitEvidenceByQuestion(
+	env: AppBindings,
+	question: string,
+	limit: number,
+): Promise<EvidenceResult[]> {
+	const tokens = tokenizeProjectLookupText(question).slice(0, 5);
+
+	if (tokens.length === 0) {
+		return [];
+	}
+
+	const tokenConditions = tokens
+		.map(
+			() =>
+				`(
+					lower(replace(replace(repository_name, '-', ' '), '_', ' ')) LIKE ?
+					OR lower(replace(replace(title, '-', ' '), '_', ' ')) LIKE ?
+					OR lower(public_url) LIKE ?
+					OR lower(content) LIKE ?
+				)`,
+		)
+		.join(" AND ");
+
+	const bindings = tokens.flatMap((token) => {
+		const pattern = `%${token}%`;
+		return [pattern, pattern, pattern, pattern];
+	});
+
+	const rows = await env.DB
+		.prepare(
+			`
+			SELECT
+				id AS chunk_id,
+				document_id,
+				title,
+				source_type,
+				repository_name,
+				file_path,
+				commit_sha,
+				public_url,
+				content,
+				metadata_json AS metadata
+			FROM source_chunks
+			WHERE (
+					lower(source_type) LIKE '%commit%'
+					OR lower(title) LIKE '%commit%'
+					OR lower(file_path) LIKE '%commit%'
+					OR lower(content) LIKE '%commit%'
+					OR commit_sha IS NOT NULL
+				)
+				AND ${tokenConditions}
+			ORDER BY
+				CASE
+					WHEN lower(title) LIKE '%commit%' THEN 0
+					WHEN lower(source_type) LIKE '%commit%' THEN 1
+					WHEN commit_sha IS NOT NULL THEN 2
+					ELSE 3
+				END,
+				chunk_index ASC
+			LIMIT ?
+			`,
+		)
+		.bind(...bindings, limit)
+		.all<{
+			chunk_id: string;
+			document_id: string;
+			title: string;
+			source_type: EvidenceSourceType;
+			repository_name: string | null;
+			file_path: string | null;
+			commit_sha: string | null;
+			public_url: string;
+			content: string;
+			metadata: string | null;
+		}>();
+
+	return (rows.results ?? []).map((row, index) => ({
+		chunkId: row.chunk_id,
+		documentId: row.document_id,
+		title: row.title,
+		sourceType: row.source_type,
+		repositoryName: row.repository_name,
+		filePath: row.file_path,
+		commitSha: row.commit_sha,
+		publicUrl: row.public_url,
+		content: row.content,
+		score: 85 - index,
+		retrievalMode: "exact",
+		metadata: parseMetadata(row.metadata),
+	}));
+}
+
+function tokenizeProjectLookupText(value: string): string[] {
+	const stopWords = new Set([
+		"tell",
+		"me",
+		"about",
+		"the",
+		"of",
+		"in",
+		"for",
+		"vansh",
+		"jain",
+		"github",
+		"repo",
+		"repository",
+		"project",
+		"commit",
+		"history",
+		"specific",
+		"specifically",
+		"recent",
+		"changes",
+		"what",
+		"changed",
+	]);
+
+	return normalizeSearchText(value)
+		.split(" ")
+		.filter((token) => token.length >= 3 && !stopWords.has(token));
+}
+
 
 function mergeEvidenceResults(evidenceGroups: EvidenceResult[]): EvidenceResult[] {
 	const seen = new Set<string>();
