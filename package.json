@@ -52,7 +52,8 @@
     "vector:embeddings:generate": "node scripts/embedding/generate-development-embeddings.mjs",
     "vector:upsert:dev": "node scripts/embedding/upsert-development-vectors.mjs",
     "vector:semantic:smoke": "node scripts/embedding/smoke-vector-search.mjs",
-    "chat:smoke": "node scripts/chat/smoke-grounded-chat.mjs"
+    "chat:smoke": "node scripts/chat/smoke-grounded-chat.mjs",
+    "eval:chat": "node scripts/eval/run-chat-eval.mjs"
   },
   "type": "module"
 }

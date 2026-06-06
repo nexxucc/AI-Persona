@@ -92,6 +92,19 @@ export async function retrieveHybridEvidence(
 		normalizedQuery,
 	);
 
+	const commitHistoryQuery = isCommitHistoryQuery(normalizedQuery);
+
+	// Resume-led seeding is only for truly general "what projects have you built"
+	// questions. When a specific repository is named (e.g. "tell me about the
+	// Assessment-Creator project"), scope to that repo instead so its README is
+	// not displaced by unrelated resume chunks.
+	const broadGeneralQuery = broadProjectQuery && mentionedRepositoryNames.size === 0;
+
+	const commitEvidence =
+		commitHistoryQuery && mentionedRepositoryNames.size > 0
+			? await searchRepositoryCommitEvidence(db, mentionedRepositoryNames)
+			: [];
+
 	const repositoryExpansionResults =
 		mentionedRepositoryNames.size > 0
 			? await searchMentionedRepositoryEvidence(db, mentionedRepositoryNames)
@@ -113,10 +126,24 @@ export async function retrieveHybridEvidence(
 			: scopedBaseResults;
 
 	const rankedResults = projectQuery
-		? diversifyProjectEvidence(scopedResults, normalizedQuery)
+		? diversifyProjectEvidence(scopedResults, normalizedQuery, broadGeneralQuery)
 		: scopedResults;
 
-	return dedupeEvidenceForDisplay(rankedResults, projectQuery, normalizedQuery).slice(0, finalLimit);
+	const dedupedResults = dedupeEvidenceForDisplay(
+		rankedResults,
+		projectQuery,
+		broadGeneralQuery,
+		normalizedQuery,
+	);
+
+	// Commit-history questions must lead with the actual commit evidence, which
+	// generic project ranking buries beneath README/metadata chunks.
+	const finalResults =
+		commitEvidence.length > 0
+			? dedupeByChunkId([...commitEvidence, ...dedupedResults])
+			: dedupedResults;
+
+	return finalResults.slice(0, finalLimit);
 }
 
 export function mergeEvidenceResults(
@@ -154,11 +181,22 @@ export function mergeEvidenceResults(
 function diversifyProjectEvidence(
 	results: EvidenceResult[],
 	query: string,
+	broadQuery: boolean,
 ): EvidenceResult[] {
 	const selected: EvidenceResult[] = [];
 	const selectedChunkIds = new Set<string>();
 	const selectedDocumentIds = new Set<string>();
 	const selectedRepositories = new Set<string>();
+
+	const pushResult = (result: EvidenceResult): void => {
+		if (selectedChunkIds.has(result.chunkId)) {
+			return;
+		}
+
+		selected.push(result);
+		selectedChunkIds.add(result.chunkId);
+		selectedDocumentIds.add(result.documentId);
+	};
 
 	const githubResults = results
 		.filter((result) => result.sourceType !== "resume")
@@ -169,6 +207,27 @@ function diversifyProjectEvidence(
 		.filter((result) => result.sourceType === "resume")
 		.sort(compareEvidence);
 
+	// Broad "what projects have you built / your RAG projects" questions are best
+	// answered from the resume: many repos have no README and only a thin
+	// "No description provided" metadata chunk, so lead with the resume's
+	// per-project descriptions before the repository chunks.
+	if (broadQuery) {
+		// Lead with the resume chunks whose text actually matches the query's key
+		// terms (including short technical tokens like "n8n", "rag", "llm"), so a
+		// question about a specific project surfaces that project's description
+		// rather than another section that merely shares a generic keyword.
+		const orderedResume = [...resumeResults].sort(
+			(left, right) =>
+				scoreResumeQueryRelevance(right, query) - scoreResumeQueryRelevance(left, query),
+		);
+
+		for (const result of orderedResume.slice(0, 3)) {
+			pushResult(result);
+		}
+	}
+
+	const githubLimit = broadQuery ? 9 : 6;
+
 	for (const result of githubResults) {
 		const repositoryKey = result.repositoryName ?? result.documentId;
 
@@ -176,23 +235,19 @@ function diversifyProjectEvidence(
 			continue;
 		}
 
-		selected.push(result);
-		selectedChunkIds.add(result.chunkId);
-		selectedDocumentIds.add(result.documentId);
+		pushResult(result);
 		selectedRepositories.add(repositoryKey);
 
-		if (selected.length >= 6) {
+		if (selected.length >= githubLimit) {
 			break;
 		}
 	}
 
-	const resumeSupportLimit = selected.length >= 4 ? 2 : 1;
+	if (!broadQuery) {
+		const resumeSupportLimit = selected.length >= 4 ? 2 : 1;
 
-	for (const result of resumeResults.slice(0, resumeSupportLimit)) {
-		if (!selectedChunkIds.has(result.chunkId)) {
-			selected.push(result);
-			selectedChunkIds.add(result.chunkId);
-			selectedDocumentIds.add(result.documentId);
+		for (const result of resumeResults.slice(0, resumeSupportLimit)) {
+			pushResult(result);
 		}
 	}
 
@@ -201,11 +256,7 @@ function diversifyProjectEvidence(
 			continue;
 		}
 
-		if (!selectedChunkIds.has(result.chunkId)) {
-			selected.push(result);
-			selectedChunkIds.add(result.chunkId);
-			selectedDocumentIds.add(result.documentId);
-		}
+		pushResult(result);
 	}
 
 	return selected;
@@ -273,6 +324,55 @@ function isRelevantProjectEvidence(result: EvidenceResult, query: string): boole
 	}
 
 	return false;
+}
+
+const RESUME_RELEVANCE_STOPWORDS = new Set([
+	"what",
+	"did",
+	"does",
+	"with",
+	"and",
+	"the",
+	"your",
+	"you",
+	"kind",
+	"have",
+	"has",
+	"worked",
+	"work",
+	"vansh",
+	"jain",
+	"project",
+	"projects",
+	"about",
+	"tell",
+	"for",
+	"are",
+	"his",
+	"built",
+	"build",
+	"made",
+	"most",
+]);
+
+function scoreResumeQueryRelevance(result: EvidenceResult, query: string): number {
+	const content = result.content.toLowerCase();
+	const terms = new Set(
+		query
+			.toLowerCase()
+			.split(/[^a-z0-9]+/)
+			.filter((term) => term.length >= 3 && !RESUME_RELEVANCE_STOPWORDS.has(term)),
+	);
+
+	let score = 0;
+
+	for (const term of terms) {
+		if (content.includes(term)) {
+			score += 1;
+		}
+	}
+
+	return score;
 }
 
 function extractMeaningfulTerms(query: string): string[] {
@@ -411,6 +511,15 @@ function projectRelevanceScore(result: EvidenceResult, query: string): number {
 		score += 2;
 	}
 
+	// A bare repository-metadata chunk with no description carries no substance
+	// to explain a project; push it below resume / README / document evidence.
+	if (
+		result.sourceType === "github_repository" &&
+		searchableText.includes("no description provided")
+	) {
+		score -= 12;
+	}
+
 	if (shouldExcludeForBroadProjectAnswer(result)) {
 		score -= 100;
 	}
@@ -503,6 +612,104 @@ function isProjectOrRepositoryQuery(query: string): boolean {
 		"drone",
 		"cell signal",
 	].some((keyword) => normalizedQuery.includes(keyword));
+}
+
+function isCommitHistoryQuery(query: string): boolean {
+	const normalizedQuery = query.toLowerCase();
+
+	return [
+		"commit",
+		"commits",
+		"commit history",
+		"recent changes",
+		"what changed",
+		"recently changed",
+		"repository history",
+		"repo history",
+		"change history",
+	].some((keyword) => normalizedQuery.includes(keyword));
+}
+
+function dedupeByChunkId(results: EvidenceResult[]): EvidenceResult[] {
+	const seen = new Set<string>();
+	const deduped: EvidenceResult[] = [];
+
+	for (const result of results) {
+		if (seen.has(result.chunkId)) {
+			continue;
+		}
+
+		seen.add(result.chunkId);
+		deduped.push(result);
+	}
+
+	return deduped;
+}
+
+async function searchRepositoryCommitEvidence(
+	db: D1Database,
+	repositoryNames: Set<string>,
+): Promise<EvidenceResult[]> {
+	const names = [...repositoryNames].filter(Boolean);
+
+	if (names.length === 0) {
+		return [];
+	}
+
+	const placeholders = names.map(() => "?").join(", ");
+
+	const rows = await db
+		.prepare(
+			`
+			SELECT
+				id AS chunk_id,
+				document_id,
+				title,
+				source_type,
+				repository_name,
+				file_path,
+				commit_sha,
+				public_url,
+				content,
+				metadata_json AS metadata
+			FROM source_chunks
+			WHERE repository_name IN (${placeholders})
+				AND source_type = 'github_commit'
+			ORDER BY repository_name ASC, chunk_index ASC, id ASC
+			LIMIT 8;
+			`,
+		)
+		.bind(...names)
+		.all<{
+			chunk_id: string;
+			document_id: string;
+			title: string;
+			source_type: EvidenceResult["sourceType"];
+			repository_name: string | null;
+			file_path: string | null;
+			commit_sha: string | null;
+			public_url: string;
+			content: string;
+			metadata: string | null;
+		}>();
+
+	return rows.results.map((row, index) => ({
+		chunkId: row.chunk_id,
+		documentId: row.document_id,
+		title: row.title,
+		sourceType: row.source_type,
+		repositoryName: row.repository_name,
+		filePath: row.file_path,
+		commitSha: row.commit_sha,
+		publicUrl: row.public_url,
+		content: row.content,
+		score: 120 - index,
+		retrievalMode: "exact",
+		metadata: {
+			...parseMetadata(row.metadata),
+			commit_evidence: true,
+		},
+	}));
 }
 
 function isBroadProjectQuery(query: string): boolean {
@@ -838,12 +1045,14 @@ function getMentionedRepositoryNames(
 function dedupeEvidenceForDisplay(
 	results: EvidenceResult[],
 	projectQuery: boolean,
+	broadQuery: boolean,
 	query: string,
 ): EvidenceResult[] {
 	const selected: EvidenceResult[] = [];
 	const seenChunks = new Set<string>();
 	const seenDocuments = new Set<string>();
 	const repositoryCounts = new Map<string, number>();
+	const resumeLimit = broadQuery ? 4 : 2;
 	let resumeCount = 0;
 
 	for (const result of results) {
@@ -856,7 +1065,7 @@ function dedupeEvidenceForDisplay(
 		}
 
 		if (result.sourceType === "resume") {
-			if (resumeCount >= 2) {
+			if (resumeCount >= resumeLimit) {
 				continue;
 			}
 

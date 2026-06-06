@@ -112,7 +112,7 @@ app.post("/api/chat", async (c) => {
 		geminiApiKeys,
 		message,
 		{
-			finalLimit: 5,
+			finalLimit: 8,
 		},
 	);
 

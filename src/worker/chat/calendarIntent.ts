@@ -339,7 +339,22 @@ function formatSlots(slots: AvailabilitySlot[]): string {
 }
 
 function isCalendarRelatedMessage(normalizedMessage: string): boolean {
-	return [
+	const phraseTerms = [
+		"book a call",
+		"book a meeting",
+		"book meeting",
+		"book slot",
+		"set up a call",
+		"schedule a call",
+	];
+
+	if (phraseTerms.some((term) => normalizedMessage.includes(term))) {
+		return true;
+	}
+
+	// Whole-word matching so "called", "recall", "freely" etc. do not
+	// false-trigger the calendar flow.
+	const wordTerms = [
 		"available",
 		"availability",
 		"free",
@@ -347,10 +362,11 @@ function isCalendarRelatedMessage(normalizedMessage: string): boolean {
 		"meeting",
 		"call",
 		"schedule",
-		"book a call",
-		"book meeting",
-		"book slot",
-	].some((term) => normalizedMessage.includes(term));
+		"reschedule",
+		"appointment",
+	];
+
+	return wordTerms.some((term) => new RegExp(`\\b${term}\\b`).test(normalizedMessage));
 }
 
 function isBookingIntent(normalizedMessage: string): boolean {
