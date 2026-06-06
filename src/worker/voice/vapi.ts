@@ -124,19 +124,42 @@ async function generateVoiceGroundedAnswer(
 	question: string,
 	evidence: EvidenceResult[],
 ): Promise<string> {
-	const evidenceText = formatVoiceEvidence(evidence, 7000);
+	const evidenceText = formatVoiceEvidence(evidence, 6000);
 
 	if (!evidenceText) {
 		return "I do not have enough retrieved evidence to answer that reliably.";
 	}
 
+	const firstAnswer = await requestVoiceAnswer(apiKey, question, evidenceText);
+
+	if (isUsableVoiceAnswer(firstAnswer)) {
+		return sanitizeVoiceAnswer(firstAnswer);
+	}
+
+	const compactEvidenceText = formatVoiceEvidence(evidence, 3000);
+	const retryAnswer = await requestVoiceAnswer(apiKey, question, compactEvidenceText);
+
+	if (isUsableVoiceAnswer(retryAnswer)) {
+		return sanitizeVoiceAnswer(retryAnswer);
+	}
+
+	return createVoiceEvidenceFallback(evidence);
+}
+
+async function requestVoiceAnswer(
+	apiKey: string,
+	question: string,
+	evidenceText: string,
+): Promise<string | null> {
 	const prompt = [
 		"You are generating a short spoken answer for Vansh Jain's AI representative.",
 		"Use only the evidence below.",
 		"Speak in third person: say Vansh, he, or his.",
 		"Do not use I, me, my, or mine when referring to Vansh.",
 		"Do not mention citations, chunk IDs, source titles, or internal retrieval details.",
-		"Keep the answer voice-friendly: 3 to 5 sentences, no markdown bullets.",
+		"Return one complete paragraph of 3 to 5 complete sentences.",
+		"The answer must be complete and must not stop mid-sentence.",
+		"Begin directly with the answer. Do not add markdown bullets.",
 		"If the evidence is not enough, say that the available evidence does not verify the answer reliably.",
 		"",
 		"Question:",
@@ -165,16 +188,16 @@ async function generateVoiceGroundedAnswer(
 					},
 				],
 				generationConfig: {
-					temperature: 0.2,
+					temperature: 0.15,
 					topP: 0.8,
-					maxOutputTokens: 220,
+					maxOutputTokens: 320,
 				},
 			}),
 		},
 	);
 
 	if (!response.ok) {
-		return createVoiceEvidenceFallback(evidence);
+		return null;
 	}
 
 	const data = await response.json<GeminiGenerateContentResponse>();
@@ -183,12 +206,29 @@ async function generateVoiceGroundedAnswer(
 		.join("")
 		.trim();
 
+	return answer || null;
+}
+
+function isUsableVoiceAnswer(answer: string | null): answer is string {
 	if (!answer) {
-		return createVoiceEvidenceFallback(evidence);
+		return false;
 	}
 
-	return sanitizeVoiceAnswer(answer);
+	const normalized = answer.replace(/\s+/g, " ").trim();
+
+	if (normalized.length < 80) {
+		return false;
+	}
+
+	if (!/[.!?]$/.test(normalized)) {
+		return false;
+	}
+
+	return !/\b(for|and|or|with|because|including|using|such as|as|to|in|at|by)$/i.test(
+		normalized,
+	);
 }
+
 
 function formatVoiceEvidence(evidence: EvidenceResult[], maxCharacters: number): string {
 	const selectedLines: string[] = [];
