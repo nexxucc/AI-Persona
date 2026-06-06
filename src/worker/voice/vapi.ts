@@ -445,6 +445,9 @@ function toSentenceFragment(value: string): string {
 		.replace(/^the project is\s+/i, "")
 		.replace(/^it is\s+/i, "")
 		.replace(/^is\s+/i, "")
+		.replace(/^evaluation spans\s+/i, "")
+		.replace(/^evaluation includes\s+/i, "")
+		.replace(/^implementation includes\s+/i, "")
 		.replace(/\s+/g, " ")
 		.trim()
 		.replace(/[.!?]+$/, "");
