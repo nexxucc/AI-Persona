@@ -166,7 +166,8 @@ function buildVoiceGenerationQuestion(question: string): string {
 	}
 
 	return [
-		question,
+		"Explain why Vansh Jain is a strong fit for an AI/software engineering role, based only on the provided evidence.",
+		"The caller did not provide a specific job description, so do not reject the answer because exact role requirements are missing.",
 		"",
 		"Answer as Vansh Jain's AI representative, not as Vansh himself.",
 		"Use third person. Say Vansh, he, or his.",
@@ -175,7 +176,7 @@ function buildVoiceGenerationQuestion(question: string): string {
 		"Use only the provided evidence.",
 		"Prioritize resume, education, internships, skills, and strong project evidence when available.",
 		"Do not over-focus on one weak repository if stronger resume or project evidence is present.",
-		"If the exact role description is not present, answer generally for an AI/software engineering role and do not invent requirements.",
+		"Do not invent requirements, employers, achievements, or metrics that are not supported by the evidence.",
 	].join("\n");
 }
 
