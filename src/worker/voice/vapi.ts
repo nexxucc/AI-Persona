@@ -112,44 +112,42 @@ async function retrieveVoiceEvidence(
 	question: string,
 ): Promise<EvidenceResult[]> {
 	const normalizedQuestion = question.toLowerCase();
-	const retrievalQuery = buildVoiceRetrievalQuery(question);
 
-	const primaryEvidence = await retrieveHybridEvidence(
+	if (isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
+		const roleFitQuery = [
+			question,
+			"resume education internships work experience skills AI machine learning software engineering projects role fit technical background",
+			"evidence from resume, GitHub repositories, project summaries, README files, and implementation details",
+		].join("\n");
+
+		const [resumeEvidence, broadProfileEvidence] = await Promise.all([
+			fetchResumeEvidence(env, 10),
+			retrieveHybridEvidence(
+				env.DB,
+				env.VECTORIZE,
+				env.GEMINI_API_KEY,
+				roleFitQuery,
+				{
+					finalLimit: 10,
+				},
+			),
+		]);
+
+		return mergeEvidenceResults([
+			...resumeEvidence,
+			...broadProfileEvidence,
+		]).slice(0, 14);
+	}
+
+	return retrieveHybridEvidence(
 		env.DB,
 		env.VECTORIZE,
 		env.GEMINI_API_KEY,
-		retrievalQuery,
+		buildVoiceRetrievalQuery(question),
 		{
 			finalLimit: 8,
 		},
 	);
-
-	if (!isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
-		return primaryEvidence;
-	}
-
-	const [resumeEvidence, broadProfileEvidence] = await Promise.all([
-		fetchResumeEvidence(env, 12),
-		retrieveHybridEvidence(
-			env.DB,
-			env.VECTORIZE,
-			env.GEMINI_API_KEY,
-			[
-				question,
-				"resume education internships work experience skills AI machine learning software engineering projects role fit technical background",
-				"evidence from resume, GitHub repositories, project summaries, README files, and implementation details",
-			].join("\n"),
-			{
-				finalLimit: 12,
-			},
-		),
-	]);
-
-	return mergeEvidenceResults([
-		...resumeEvidence,
-		...broadProfileEvidence,
-		...primaryEvidence,
-	]).slice(0, 16);
 }
 
 
