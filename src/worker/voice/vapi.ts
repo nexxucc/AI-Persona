@@ -131,25 +131,30 @@ async function retrieveVoiceEvidence(
 		return primaryEvidence;
 	}
 
-	const [resumeEvidence, projectEvidence] = await Promise.all([
-		fetchResumeEvidence(env, 5),
+	const [resumeEvidence, broadProfileEvidence] = await Promise.all([
+		fetchResumeEvidence(env, 12),
 		retrieveHybridEvidence(
 			env.DB,
 			env.VECTORIZE,
 			env.GEMINI_API_KEY,
-			"What kind of AI projects has Vansh worked on? curated GitHub projects resume skills experience",
+			[
+				question,
+				"resume education internships work experience skills AI machine learning software engineering projects role fit technical background",
+				"evidence from resume, GitHub repositories, project summaries, README files, and implementation details",
+			].join("\n"),
 			{
-				finalLimit: 8,
+				finalLimit: 12,
 			},
 		),
 	]);
 
 	return mergeEvidenceResults([
 		...resumeEvidence,
+		...broadProfileEvidence,
 		...primaryEvidence,
-		...projectEvidence,
-	]).slice(0, 10);
+	]).slice(0, 16);
 }
+
 
 function buildVoiceGenerationQuestion(question: string): string {
 	const normalizedQuestion = question.toLowerCase();
@@ -162,10 +167,13 @@ function buildVoiceGenerationQuestion(question: string): string {
 		question,
 		"",
 		"Answer as a concise role-fit response for a recruiter or evaluator.",
-		"Use resume, education, experience, skills, and curated GitHub project evidence.",
+		"Use only the provided evidence.",
+		"Prioritize resume, education, internships, skills, and strong project evidence when available.",
+		"Do not over-focus on one weak repository if stronger resume or project evidence is present.",
 		"If the exact role description is not present, answer generally for an AI/software engineering role and do not invent requirements.",
 	].join("\n");
 }
+
 
 async function fetchResumeEvidence(
 	env: AppBindings,
