@@ -281,16 +281,16 @@ function createVoiceEvidenceFallback(
 
 		if (highlights.length >= 2) {
 			return [
-				`Based on the retrieved project evidence, ${projectTitle} is ${ensureSentence(highlights[0]).replace(/^the project is\s+/i, "")}`,
-				`The evidence also mentions ${ensureSentence(highlights[1])}`,
-				highlights[2] ? `Another relevant detail is ${ensureSentence(highlights[2])}` : "",
+				`Based on the retrieved project evidence, ${projectTitle} is described as ${ensureSentence(toSentenceFragment(highlights[0]))}`,
+				`It includes ${ensureSentence(toSentenceFragment(highlights[1]))}`,
+				highlights[2] ? `Its evaluation or implementation details include ${ensureSentence(toSentenceFragment(highlights[2]))}` : "",
 			]
 				.filter(Boolean)
 				.join(" ");
 		}
 
 		if (highlights.length === 1) {
-			return `Based on the retrieved project evidence, ${projectTitle} is ${ensureSentence(highlights[0]).replace(/^the project is\s+/i, "")}`;
+			return `Based on the retrieved project evidence, ${projectTitle} is described as ${ensureSentence(toSentenceFragment(highlights[0]))}`;
 		}
 
 		return `I found retrieved evidence for ${projectTitle}, but I do not have enough detail to summarize it reliably.`;
@@ -437,6 +437,25 @@ function shortenAtNaturalBoundary(value: string, maxLength: number): string {
 
 	return clipped.replace(/\s+\S*$/, "").replace(/[,:;]+$/, "").trim();
 }
+
+function toSentenceFragment(value: string): string {
+	const cleaned = value
+		.replace(/^this paper presents\s+/i, "")
+		.replace(/^this project presents\s+/i, "")
+		.replace(/^the project is\s+/i, "")
+		.replace(/^it is\s+/i, "")
+		.replace(/^is\s+/i, "")
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/[.!?]+$/, "");
+
+	if (!cleaned) {
+		return "";
+	}
+
+	return cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+}
+
 
 function ensureSentence(value: string): string {
 	const trimmed = value.trim();
