@@ -1,5 +1,4 @@
 import { bookCalendarEvent, getAvailability } from "../calendar/googleCalendar";
-import { generateGroundedAnswer } from "../chat/groundedAnswer";
 import { retrieveHybridEvidence } from "../retrieval/hybridRetrieval";
 import type { AvailabilitySlot } from "../calendar/types";
 import type { EvidenceResult, EvidenceSourceType } from "../retrieval/types";
@@ -96,15 +95,156 @@ async function answerQuestion(
 	const evidence = await retrieveVoiceEvidence(env, question);
 	const generationQuestion = buildVoiceGenerationQuestion(question);
 
-	const groundedAnswer = await generateGroundedAnswer(
+	return generateVoiceGroundedAnswer(
 		env.GEMINI_API_KEY,
 		generationQuestion,
 		evidence,
 	);
-
-	return groundedAnswer.answer;
 }
 
+
+
+type GeminiGenerateContentResponse = {
+	candidates?: Array<{
+		content?: {
+			parts?: Array<{
+				text?: string;
+			}>;
+		};
+	}>;
+	error?: {
+		message?: string;
+	};
+};
+
+const VOICE_ANSWER_MODEL = "gemini-2.5-flash";
+
+async function generateVoiceGroundedAnswer(
+	apiKey: string,
+	question: string,
+	evidence: EvidenceResult[],
+): Promise<string> {
+	const evidenceText = formatVoiceEvidence(evidence, 7000);
+
+	if (!evidenceText) {
+		return "I do not have enough retrieved evidence to answer that reliably.";
+	}
+
+	const prompt = [
+		"You are generating a short spoken answer for Vansh Jain's AI representative.",
+		"Use only the evidence below.",
+		"Speak in third person: say Vansh, he, or his.",
+		"Do not use I, me, my, or mine when referring to Vansh.",
+		"Do not mention citations, chunk IDs, source titles, or internal retrieval details.",
+		"Keep the answer voice-friendly: 3 to 5 sentences, no markdown bullets.",
+		"If the evidence is not enough, say that the available evidence does not verify the answer reliably.",
+		"",
+		"Question:",
+		question,
+		"",
+		"Evidence:",
+		evidenceText,
+	].join("\n");
+
+	const response = await fetch(
+		`https://generativelanguage.googleapis.com/v1beta/models/${VOICE_ANSWER_MODEL}:generateContent?key=${apiKey}`,
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				contents: [
+					{
+						role: "user",
+						parts: [
+							{
+								text: prompt,
+							},
+						],
+					},
+				],
+				generationConfig: {
+					temperature: 0.2,
+					topP: 0.8,
+					maxOutputTokens: 220,
+				},
+			}),
+		},
+	);
+
+	if (!response.ok) {
+		return createVoiceEvidenceFallback(evidence);
+	}
+
+	const data = await response.json<GeminiGenerateContentResponse>();
+	const answer = data.candidates?.[0]?.content?.parts
+		?.map((part) => part.text ?? "")
+		.join("")
+		.trim();
+
+	if (!answer) {
+		return createVoiceEvidenceFallback(evidence);
+	}
+
+	return sanitizeVoiceAnswer(answer);
+}
+
+function formatVoiceEvidence(evidence: EvidenceResult[], maxCharacters: number): string {
+	const selectedLines: string[] = [];
+	let usedCharacters = 0;
+
+	for (const item of evidence.slice(0, 10)) {
+		const sourceParts = [
+			item.title,
+			item.sourceType,
+			item.repositoryName ? `repository: ${item.repositoryName}` : "",
+			item.filePath ? `file: ${item.filePath}` : "",
+		].filter(Boolean);
+
+		const content = item.content.replace(/\s+/g, " ").trim();
+
+		if (!content) {
+			continue;
+		}
+
+		const remainingCharacters = maxCharacters - usedCharacters;
+
+		if (remainingCharacters <= 0) {
+			break;
+		}
+
+		const clippedContent = content.slice(0, Math.min(900, remainingCharacters));
+		const line = `Source: ${sourceParts.join(" | ")}\nContent: ${clippedContent}`;
+
+		selectedLines.push(line);
+		usedCharacters += line.length;
+	}
+
+	return selectedLines.join("\n\n").trim();
+}
+
+function sanitizeVoiceAnswer(answer: string): string {
+	return answer
+		.replace(/\s+/g, " ")
+		.replace(/^["']|["']$/g, "")
+		.trim();
+}
+
+function createVoiceEvidenceFallback(evidence: EvidenceResult[]): string {
+	const hasResumeEvidence = evidence.some((item) => item.sourceType === "resume");
+	const hasProjectEvidence = evidence.some((item) => item.sourceType !== "resume");
+
+	if (hasResumeEvidence && hasProjectEvidence) {
+		return "I found relevant resume and project evidence for this, but I cannot generate a complete spoken answer right now. Please ask again in a moment.";
+	}
+
+	if (hasResumeEvidence) {
+		return "I found relevant resume evidence for this, but I cannot generate a complete spoken answer right now. Please ask again in a moment.";
+	}
+
+	return "I found some relevant evidence for this, but I cannot answer it reliably right now.";
+}
 
 
 async function retrieveVoiceEvidence(
