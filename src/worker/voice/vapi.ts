@@ -17,6 +17,21 @@ type ToolCall = {
 	arguments: Record<string, unknown>;
 };
 
+type GeminiGenerateContentResponse = {
+	candidates?: Array<{
+		content?: {
+			parts?: Array<{
+				text?: string;
+			}>;
+		};
+	}>;
+	error?: {
+		message?: string;
+	};
+};
+
+const VOICE_ANSWER_MODEL = "gemini-2.5-flash";
+
 export async function handleVapiToolCalls(
 	env: AppBindings,
 	body: unknown,
@@ -99,32 +114,17 @@ async function answerQuestion(
 		env.GEMINI_API_KEY,
 		generationQuestion,
 		evidence,
+		question,
 	);
 }
-
-
-
-type GeminiGenerateContentResponse = {
-	candidates?: Array<{
-		content?: {
-			parts?: Array<{
-				text?: string;
-			}>;
-		};
-	}>;
-	error?: {
-		message?: string;
-	};
-};
-
-const VOICE_ANSWER_MODEL = "gemini-2.5-flash";
 
 async function generateVoiceGroundedAnswer(
 	apiKey: string,
 	question: string,
 	evidence: EvidenceResult[],
+	originalQuestion: string,
 ): Promise<string> {
-	const evidenceText = formatVoiceEvidence(evidence, 3500);
+	const evidenceText = formatVoiceEvidence(evidence, 4200);
 
 	if (!evidenceText) {
 		return "I do not have enough retrieved evidence to answer that reliably.";
@@ -136,9 +136,8 @@ async function generateVoiceGroundedAnswer(
 		return sanitizeVoiceAnswer(answer);
 	}
 
-	return createVoiceEvidenceFallback(question, evidence);
+	return sanitizeVoiceAnswer(createVoiceEvidenceFallback(originalQuestion, evidence));
 }
-
 
 async function requestVoiceAnswer(
 	apiKey: string,
@@ -185,7 +184,7 @@ async function requestVoiceAnswer(
 					generationConfig: {
 						temperature: 0.15,
 						topP: 0.8,
-						maxOutputTokens: 320,
+						maxOutputTokens: 360,
 					},
 				}),
 			},
@@ -227,7 +226,6 @@ function isUsableVoiceAnswer(answer: string | null): answer is string {
 	);
 }
 
-
 function formatVoiceEvidence(evidence: EvidenceResult[], maxCharacters: number): string {
 	const selectedLines: string[] = [];
 	let usedCharacters = 0;
@@ -252,7 +250,10 @@ function formatVoiceEvidence(evidence: EvidenceResult[], maxCharacters: number):
 			break;
 		}
 
-		const clippedContent = content.slice(0, Math.min(900, remainingCharacters));
+		const clippedContent = shortenAtNaturalBoundary(
+			content,
+			Math.min(850, remainingCharacters),
+		);
 		const line = `Source: ${sourceParts.join(" | ")}\nContent: ${clippedContent}`;
 
 		selectedLines.push(line);
@@ -261,215 +262,6 @@ function formatVoiceEvidence(evidence: EvidenceResult[], maxCharacters: number):
 
 	return selectedLines.join("\n\n").trim();
 }
-
-function sanitizeVoiceAnswer(answer: string): string {
-	return answer
-		.replace(/\s+/g, " ")
-		.replace(/^["']|["']$/g, "")
-		.trim();
-}
-
-function createVoiceEvidenceFallback(
-	question: string,
-	evidence: EvidenceResult[],
-): string {
-	const normalizedQuestion = question.toLowerCase();
-	const highlights = selectVoiceEvidenceHighlights(evidence, 3);
-
-	if (isProjectQuestion(normalizedQuestion)) {
-		const projectTitle = getBestEvidenceTitle(evidence);
-
-		if (highlights.length >= 2) {
-			return [
-				`Based on the retrieved project evidence, ${projectTitle} is described as ${ensureSentence(toSentenceFragment(highlights[0]))}`,
-				`It includes ${ensureSentence(toSentenceFragment(highlights[1]))}`,
-				highlights[2] ? `Its evaluation or implementation details include ${ensureSentence(toSentenceFragment(highlights[2]))}` : "",
-			]
-				.filter(Boolean)
-				.join(" ");
-		}
-
-		if (highlights.length === 1) {
-			return `Based on the retrieved project evidence, ${projectTitle} is described as ${ensureSentence(toSentenceFragment(highlights[0]))}`;
-		}
-
-		return `I found retrieved evidence for ${projectTitle}, but I do not have enough detail to summarize it reliably.`;
-	}
-
-	if (highlights.length >= 2) {
-		return [
-			"Vansh appears to be a strong fit for an AI or software engineering role based on the retrieved resume and project evidence.",
-			`The evidence highlights ${ensureSentence(highlights[0])}`,
-			`It also mentions ${ensureSentence(highlights[1])}`,
-			highlights[2] ? `Another relevant point is ${ensureSentence(highlights[2])}` : "",
-			"Together, this shows practical experience across software implementation, applied AI, and machine learning work.",
-		]
-			.filter(Boolean)
-			.join(" ");
-	}
-
-	if (highlights.length === 1) {
-		return [
-			"Vansh appears relevant for an AI or software engineering role based on the retrieved evidence.",
-			`The evidence highlights ${ensureSentence(highlights[0])}`,
-			"I would avoid adding more detail unless more supporting evidence is retrieved.",
-		].join(" ");
-	}
-
-	return "I found some relevant evidence for this, but I cannot answer it reliably right now.";
-}
-
-function isProjectQuestion(normalizedQuestion: string): boolean {
-	return [
-		"project",
-		"tell me about",
-		"explain",
-		"built",
-		"what is",
-		"what did",
-		"how did",
-		"improve",
-	].some((term) => normalizedQuestion.includes(term));
-}
-
-function getBestEvidenceTitle(evidence: EvidenceResult[]): string {
-	const projectEvidence = evidence.find((item) => item.repositoryName);
-	const titledEvidence = projectEvidence ?? evidence.find((item) => item.title);
-
-	return titledEvidence?.repositoryName ?? titledEvidence?.title ?? "this project";
-}
-
-
-function selectVoiceEvidenceHighlights(
-	evidence: EvidenceResult[],
-	limit: number,
-): string[] {
-	const highlights: string[] = [];
-	const seen = new Set<string>();
-
-	const keywordPattern =
-		/\b(built|developed|engineered|implemented|integrated|created|worked|experience|intern|project|ai|ml|machine learning|software|pipeline|system|application|model|evaluation|testing|debugging|frontend|backend)\b/i;
-
-	for (const item of evidence) {
-		const candidates = item.content
-			.split(/\n|(?<=\.)\s+/)
-			.map(cleanVoiceHighlight)
-			.filter(Boolean);
-
-		for (const candidate of candidates) {
-			const normalized = candidate.toLowerCase();
-
-			if (seen.has(normalized)) {
-				continue;
-			}
-
-			if (!keywordPattern.test(candidate)) {
-				continue;
-			}
-
-			if (candidate.length < 35 || isLikelyHeading(candidate)) {
-				continue;
-			}
-
-			seen.add(normalized);
-			highlights.push(candidate);
-
-			if (highlights.length >= limit) {
-				return highlights;
-			}
-		}
-	}
-
-	return highlights;
-}
-
-function isLikelyHeading(value: string): boolean {
-	const words = value.trim().split(/\s+/);
-
-	if (words.length <= 12 && !/[.!?]$/.test(value)) {
-		return true;
-	}
-
-	if (/^[A-Z][A-Za-z0-9\s:-]+$/.test(value) && words.length <= 14) {
-		return true;
-	}
-
-	return false;
-}
-
-
-function cleanVoiceHighlight(value: string): string {
-	const cleaned = value
-		.replace(/^[\s\-•*→]+/, "")
-		.replace(/\[[^\]]+\]\([^)]+\)/g, "")
-		.replace(/https?:\/\/\S+/g, "")
-		.replace(/[`*_#>]/g, "")
-		.replace(/\s+/g, " ")
-		.trim();
-
-	if (!cleaned) {
-		return "";
-	}
-
-	return shortenAtNaturalBoundary(cleaned, 190);
-}
-
-function shortenAtNaturalBoundary(value: string, maxLength: number): string {
-	if (value.length <= maxLength) {
-		return value.replace(/[,:;]+$/, "").trim();
-	}
-
-	const clipped = value.slice(0, maxLength);
-	const boundaryIndexes = [
-		clipped.lastIndexOf("."),
-		clipped.lastIndexOf(";"),
-		clipped.lastIndexOf(","),
-		clipped.lastIndexOf(" and "),
-		clipped.lastIndexOf(" with "),
-		clipped.lastIndexOf(" for "),
-	].filter((index) => index > 60);
-
-	const boundary = boundaryIndexes.length > 0 ? Math.max(...boundaryIndexes) : -1;
-
-	if (boundary > 0) {
-		return clipped.slice(0, boundary).replace(/[,:;]+$/, "").trim();
-	}
-
-	return clipped.replace(/\s+\S*$/, "").replace(/[,:;]+$/, "").trim();
-}
-
-function toSentenceFragment(value: string): string {
-	const cleaned = value
-		.replace(/^this paper presents\s+/i, "")
-		.replace(/^this project presents\s+/i, "")
-		.replace(/^the project is\s+/i, "")
-		.replace(/^it is\s+/i, "")
-		.replace(/^is\s+/i, "")
-		.replace(/^evaluation spans\s+/i, "")
-		.replace(/^evaluation includes\s+/i, "")
-		.replace(/^implementation includes\s+/i, "")
-		.replace(/\s+/g, " ")
-		.trim()
-		.replace(/[.!?]+$/, "");
-
-	if (!cleaned) {
-		return "";
-	}
-
-	return cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
-}
-
-
-function ensureSentence(value: string): string {
-	const trimmed = value.trim();
-
-	if (!trimmed) {
-		return "";
-	}
-
-	return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
-}
-
 
 async function retrieveVoiceEvidence(
 	env: AppBindings,
@@ -481,18 +273,18 @@ async function retrieveVoiceEvidence(
 		const roleFitQuery = [
 			question,
 			"resume education internships work experience skills AI machine learning software engineering projects role fit technical background",
-			"evidence from resume, GitHub repositories, project summaries, README files, and implementation details",
+			"evidence from resume, GitHub repositories, project summaries, README files, implementation details, and commit metadata",
 		].join("\n");
 
 		const [resumeEvidence, broadProfileEvidence] = await Promise.all([
-			fetchResumeEvidence(env, 10),
+			fetchResumeEvidence(env, 8),
 			retrieveHybridEvidence(
 				env.DB,
 				env.VECTORIZE,
 				env.GEMINI_API_KEY,
 				roleFitQuery,
 				{
-					finalLimit: 10,
+					finalLimit: 8,
 				},
 			),
 		]);
@@ -500,71 +292,101 @@ async function retrieveVoiceEvidence(
 		return mergeEvidenceResults([
 			...resumeEvidence,
 			...broadProfileEvidence,
-		]).slice(0, 14);
+		]).slice(0, 12);
 	}
 
-	const evidence = await retrieveHybridEvidence(
+	const baseEvidence = await retrieveHybridEvidence(
 		env.DB,
 		env.VECTORIZE,
 		env.GEMINI_API_KEY,
 		buildVoiceRetrievalQuery(question),
 		{
-			finalLimit: isProjectQuestion(normalizedQuestion) ? 10 : 8,
+			finalLimit: isProjectQuestion(normalizedQuestion) || isCommitHistoryQuestion(normalizedQuestion) ? 10 : 8,
 		},
 	);
 
-	if (!isProjectQuestion(normalizedQuestion)) {
-		return evidence;
+	if (isCommitHistoryQuestion(normalizedQuestion)) {
+		const repositoryNames = getRepositoryNamesFromEvidence(baseEvidence);
+		const commitEvidence = await fetchCommitEvidenceByRepositoryNames(
+			env,
+			repositoryNames,
+			14,
+		);
+
+		return mergeEvidenceResults([
+			...commitEvidence,
+			...baseEvidence,
+		]).slice(0, 14);
 	}
 
-	const repositoryNames = getRepositoryNamesFromEvidence(evidence);
+	if (isProjectQuestion(normalizedQuestion)) {
+		const repositoryNames = getRepositoryNamesFromEvidence(baseEvidence);
+		const relatedRepositoryEvidence = await fetchRepositoryEvidenceByNames(
+			env,
+			repositoryNames,
+			14,
+		);
 
-	if (repositoryNames.length === 0) {
-		return evidence;
+		return mergeEvidenceResults([
+			...baseEvidence,
+			...relatedRepositoryEvidence,
+		]).slice(0, 14);
 	}
 
-	const relatedRepositoryEvidence = await fetchRepositoryEvidenceByNames(
-		env,
-		repositoryNames,
-		12,
-	);
-
-	return mergeEvidenceResults([
-		...evidence,
-		...relatedRepositoryEvidence,
-	]).slice(0, 14);
+	return baseEvidence;
 }
-
 
 function buildVoiceGenerationQuestion(question: string): string {
 	const normalizedQuestion = question.toLowerCase();
 
-	if (!isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
+	if (isCommitHistoryQuestion(normalizedQuestion)) {
 		return [
 			question,
 			"",
 			"Answer as Vansh Jain's AI representative, not as Vansh himself.",
 			"Use third person. Say Vansh, he, or his.",
-			"Do not use I, me, my, or mine when referring to Vansh.",
+			"Use only the provided commit or repository evidence.",
+			"Focus specifically on commit history, repository evolution, changed files, implementation changes, and development progress when that evidence exists.",
+			"If commit-specific evidence is not present, clearly say that the retrieved evidence does not include specific commit-history details.",
+			"Keep the answer voice-friendly: 3 to 5 complete sentences, no markdown bullets.",
+		].join("\n");
+	}
+
+	if (isProjectQuestion(normalizedQuestion)) {
+		return [
+			question,
+			"",
+			"Answer as Vansh Jain's AI representative, not as Vansh himself.",
+			"Use third person. Say Vansh, he, or his.",
+			"Use only the provided project evidence.",
+			"Cover purpose, tech stack, implementation detail, evaluation, design tradeoff, or improvement area when available.",
+			"Keep the answer voice-friendly: 3 to 5 complete sentences, no markdown bullets.",
+		].join("\n");
+	}
+
+	if (isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
+		return [
+			"Explain why Vansh Jain is a strong fit for an AI/software engineering role, based only on the provided evidence.",
+			"The caller did not provide a specific job description, so do not reject the answer because exact role requirements are missing.",
+			"",
+			"Answer as Vansh Jain's AI representative, not as Vansh himself.",
+			"Use third person. Say Vansh, he, or his.",
 			"Use only the provided evidence.",
+			"Prioritize resume, education, internships, skills, and strong project evidence when available.",
+			"Keep the answer voice-friendly: 3 to 5 complete sentences, no markdown bullets.",
+			"Do not invent requirements, employers, achievements, or metrics that are not supported by the evidence.",
 		].join("\n");
 	}
 
 	return [
-		"Explain why Vansh Jain is a strong fit for an AI/software engineering role, based only on the provided evidence.",
-		"The caller did not provide a specific job description, so do not reject the answer because exact role requirements are missing.",
+		question,
 		"",
 		"Answer as Vansh Jain's AI representative, not as Vansh himself.",
 		"Use third person. Say Vansh, he, or his.",
-		"Do not use I, me, my, or mine when referring to Vansh.",
-		"Keep the answer voice-friendly: 3 to 5 sentences, no markdown bullets.",
 		"Use only the provided evidence.",
-		"Prioritize resume, education, internships, skills, and strong project evidence when available.",
-		"Do not over-focus on one weak repository if stronger resume or project evidence is present.",
-		"Do not invent requirements, employers, achievements, or metrics that are not supported by the evidence.",
+		"Keep the answer voice-friendly: 3 to 5 complete sentences, no markdown bullets.",
 	].join("\n");
 }
-
 
 async function fetchResumeEvidence(
 	env: AppBindings,
@@ -620,22 +442,6 @@ async function fetchResumeEvidence(
 	}));
 }
 
-function getRepositoryNamesFromEvidence(evidence: EvidenceResult[]): string[] {
-	const repositoryNames = new Set<string>();
-
-	for (const item of evidence) {
-		if (item.repositoryName) {
-			repositoryNames.add(item.repositoryName);
-		}
-
-		if (repositoryNames.size >= 2) {
-			break;
-		}
-	}
-
-	return [...repositoryNames];
-}
-
 async function fetchRepositoryEvidenceByNames(
 	env: AppBindings,
 	repositoryNames: string[],
@@ -664,12 +470,13 @@ async function fetchRepositoryEvidenceByNames(
 			FROM source_chunks
 			WHERE repository_name IN (${placeholders})
 			ORDER BY
-				CASE source_type
-					WHEN 'github_readme' THEN 0
-					WHEN 'github_manifest' THEN 1
-					WHEN 'github_repository' THEN 2
-					WHEN 'github_document' THEN 3
-					ELSE 4
+				CASE
+					WHEN lower(title) LIKE '%readme%' THEN 0
+					WHEN lower(file_path) LIKE '%readme%' THEN 1
+					WHEN lower(source_type) LIKE '%manifest%' THEN 2
+					WHEN lower(source_type) LIKE '%repository%' THEN 3
+					WHEN lower(title) LIKE '%commit%' THEN 4
+					ELSE 5
 				END,
 				chunk_index ASC
 			LIMIT ?
@@ -705,65 +512,79 @@ async function fetchRepositoryEvidenceByNames(
 	}));
 }
 
-function mergeEvidenceResults(evidenceGroups: EvidenceResult[]): EvidenceResult[] {
-	const seen = new Set<string>();
-	const merged: EvidenceResult[] = [];
-
-	for (const evidence of evidenceGroups) {
-		if (seen.has(evidence.chunkId)) {
-			continue;
-		}
-
-		seen.add(evidence.chunkId);
-		merged.push(evidence);
+async function fetchCommitEvidenceByRepositoryNames(
+	env: AppBindings,
+	repositoryNames: string[],
+	limit: number,
+): Promise<EvidenceResult[]> {
+	if (repositoryNames.length === 0) {
+		return [];
 	}
 
-	return merged;
-}
+	const placeholders = repositoryNames.map(() => "?").join(", ");
 
-function parseMetadata(value: string | null | undefined): Record<string, unknown> {
-	if (!value) {
-		return {};
-	}
+	const rows = await env.DB
+		.prepare(
+			`
+			SELECT
+				id AS chunk_id,
+				document_id,
+				title,
+				source_type,
+				repository_name,
+				file_path,
+				commit_sha,
+				public_url,
+				content,
+				metadata_json AS metadata
+			FROM source_chunks
+			WHERE repository_name IN (${placeholders})
+				AND (
+					lower(source_type) LIKE '%commit%'
+					OR lower(title) LIKE '%commit%'
+					OR lower(file_path) LIKE '%commit%'
+					OR lower(content) LIKE '%commit%'
+					OR commit_sha IS NOT NULL
+				)
+			ORDER BY
+				CASE
+					WHEN lower(title) LIKE '%commit%' THEN 0
+					WHEN lower(source_type) LIKE '%commit%' THEN 1
+					WHEN commit_sha IS NOT NULL THEN 2
+					ELSE 3
+				END,
+				chunk_index ASC
+			LIMIT ?
+			`,
+		)
+		.bind(...repositoryNames, limit)
+		.all<{
+			chunk_id: string;
+			document_id: string;
+			title: string;
+			source_type: EvidenceSourceType;
+			repository_name: string | null;
+			file_path: string | null;
+			commit_sha: string | null;
+			public_url: string;
+			content: string;
+			metadata: string | null;
+		}>();
 
-	try {
-		const parsedValue = JSON.parse(value);
-		return parsedValue && typeof parsedValue === "object"
-			? parsedValue as Record<string, unknown>
-			: {};
-	} catch {
-		return {};
-	}
-}
-
-function buildVoiceRetrievalQuery(question: string): string {
-	const normalizedQuestion = question.toLowerCase();
-
-	if (isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
-		return [
-			question,
-			"resume education experience internship skills projects AI ML software engineering role fit",
-			"curated GitHub projects AI-Persona NLP-Research-Assistant ChandraQuant-Siddhanta CellSignalMapper Assessment-Creator",
-		].join("\n");
-	}
-
-	return question;
-}
-
-function isRoleFitOrBackgroundQuestion(normalizedQuestion: string): boolean {
-	return [
-		"good fit",
-		"right person",
-		"why should",
-		"why vansh",
-		"background",
-		"experience",
-		"skills",
-		"strength",
-		"hire",
-		"role",
-		"internship",
-	].some((term) => normalizedQuestion.includes(term));
+	return (rows.results ?? []).map((row, index) => ({
+		chunkId: row.chunk_id,
+		documentId: row.document_id,
+		title: row.title,
+		sourceType: row.source_type,
+		repositoryName: row.repository_name,
+		filePath: row.file_path,
+		commitSha: row.commit_sha,
+		publicUrl: row.public_url,
+		content: row.content,
+		score: 90 - index,
+		retrievalMode: "exact",
+		metadata: parseMetadata(row.metadata),
+	}));
 }
 
 async function getVoiceAvailability(
@@ -805,7 +626,7 @@ async function getVoiceAvailability(
 				: "I could not find any available 30-minute slots in the next few days.",
 		speechText:
 			slots.length > 0
-				? `I checked Vansh's calendar and found these options. ${slots
+				? `I found these available options. ${slots
 						.map((slot) => slot.spokenLabel)
 						.join(". ")}. Which option works best for you?`
 				: "I could not find any available 30-minute slots in the next few days.",
@@ -833,7 +654,9 @@ async function bookVoiceCall(
 	}
 
 	if (!emailConfirmed) {
-		return `Before booking, read this email back to the caller exactly and ask for confirmation: ${guestEmail}`;
+		return `Before booking, ask the caller to confirm this email exactly: ${formatEmailForSpeech(
+			guestEmail,
+		)}. Ask: Is that correct? Do not book until the caller confirms.`;
 	}
 
 	const booking = await bookCalendarEvent(env, {
@@ -849,7 +672,402 @@ async function bookVoiceCall(
 		booking.startTime,
 		booking.endTime,
 		booking.timezone,
-	)}. A calendar invite has been sent to ${guestEmail}.`;
+	)}. The calendar invite has been sent.`;
+}
+
+function createVoiceEvidenceFallback(
+	question: string,
+	evidence: EvidenceResult[],
+): string {
+	const normalizedQuestion = question.toLowerCase();
+	const highlights = selectVoiceEvidenceHighlights(evidence, 4);
+
+	if (isCommitHistoryQuestion(normalizedQuestion)) {
+		const projectTitle = toSpokenProjectName(getBestEvidenceTitle(evidence));
+		const commitHighlights = selectCommitEvidenceHighlights(evidence, 4);
+
+		if (commitHighlights.length > 0) {
+			return [
+				`For ${projectTitle}, the retrieved commit evidence points to ${ensureSentence(toSentenceFragment(commitHighlights[0]))}`,
+				commitHighlights[1] ? `It also shows ${ensureSentence(toSentenceFragment(commitHighlights[1]))}` : "",
+				commitHighlights[2] ? `Another commit-level detail is ${ensureSentence(toSentenceFragment(commitHighlights[2]))}` : "",
+			]
+				.filter(Boolean)
+				.join(" ");
+		}
+
+		return `I do not have specific commit-history evidence for ${projectTitle} in the retrieved sources. I can still summarize the project itself from the available repository evidence.`;
+	}
+
+	if (isProjectQuestion(normalizedQuestion)) {
+		const projectTitle = toSpokenProjectName(getBestEvidenceTitle(evidence));
+
+		if (highlights.length >= 2) {
+			return [
+				`Based on the retrieved project evidence, ${projectTitle} is described as ${ensureSentence(toSentenceFragment(highlights[0]))}`,
+				`It includes ${ensureSentence(toSentenceFragment(highlights[1]))}`,
+				highlights[2] ? `A relevant implementation or evaluation detail is ${ensureSentence(toSentenceFragment(highlights[2]))}` : "",
+				highlights[3] ? `Another useful detail is ${ensureSentence(toSentenceFragment(highlights[3]))}` : "",
+			]
+				.filter(Boolean)
+				.join(" ");
+		}
+
+		if (highlights.length === 1) {
+			return `Based on the retrieved project evidence, ${projectTitle} is described as ${ensureSentence(toSentenceFragment(highlights[0]))}`;
+		}
+
+		return `I found retrieved evidence for ${projectTitle}, but I do not have enough detail to summarize it reliably.`;
+	}
+
+	if (highlights.length >= 2) {
+		return [
+			"Vansh appears to be a strong fit for an AI or software engineering role based on the retrieved resume and project evidence.",
+			`The evidence highlights ${ensureSentence(highlights[0])}`,
+			`It also mentions ${ensureSentence(highlights[1])}`,
+			highlights[2] ? `Another relevant point is ${ensureSentence(highlights[2])}` : "",
+			"Together, this shows practical experience across software implementation, applied AI, and machine learning work.",
+		]
+			.filter(Boolean)
+			.join(" ");
+	}
+
+	if (highlights.length === 1) {
+		return [
+			"Vansh appears relevant for an AI or software engineering role based on the retrieved evidence.",
+			`The evidence highlights ${ensureSentence(highlights[0])}`,
+			"I would avoid adding more detail unless more supporting evidence is retrieved.",
+		].join(" ");
+	}
+
+	return "I found some relevant evidence for this, but I cannot answer it reliably right now.";
+}
+
+function selectVoiceEvidenceHighlights(
+	evidence: EvidenceResult[],
+	limit: number,
+): string[] {
+	const highlights: string[] = [];
+	const seen = new Set<string>();
+
+	const keywordPattern =
+		/\b(built|developed|engineered|implemented|integrated|created|worked|experience|intern|project|ai|ml|machine learning|software|pipeline|system|application|model|evaluation|testing|debugging|frontend|backend|feature|architecture|framework|indicator|diagnostic|commit|metadata|changed|updated|added|removed|refactor)\b/i;
+
+	for (const item of evidence) {
+		const candidates = item.content
+			.split(/\n|(?<=\.)\s+/)
+			.map(cleanVoiceHighlight)
+			.filter(Boolean);
+
+		for (const candidate of candidates) {
+			const normalized = candidate.toLowerCase();
+
+			if (seen.has(normalized)) {
+				continue;
+			}
+
+			if (!keywordPattern.test(candidate)) {
+				continue;
+			}
+
+			if (candidate.length < 35 || isLikelyHeading(candidate)) {
+				continue;
+			}
+
+			seen.add(normalized);
+			highlights.push(candidate);
+
+			if (highlights.length >= limit) {
+				return highlights;
+			}
+		}
+	}
+
+	return highlights;
+}
+
+function selectCommitEvidenceHighlights(
+	evidence: EvidenceResult[],
+	limit: number,
+): string[] {
+	return selectVoiceEvidenceHighlights(
+		evidence.filter(
+			(item) =>
+				item.title.toLowerCase().includes("commit") ||
+				item.sourceType.toLowerCase().includes("commit") ||
+				item.content.toLowerCase().includes("commit"),
+		),
+		limit,
+	);
+}
+
+function cleanVoiceHighlight(value: string): string {
+	const cleaned = value
+		.replace(/^[\s\-•*→]+/, "")
+		.replace(/\[[^\]]+\]\([^)]+\)/g, "")
+		.replace(/https?:\/\/\S+/g, "")
+		.replace(/[`*_#>]/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+
+	if (!cleaned) {
+		return "";
+	}
+
+	return shortenAtNaturalBoundary(cleaned, 210);
+}
+
+function shortenAtNaturalBoundary(value: string, maxLength: number): string {
+	if (value.length <= maxLength) {
+		return value.replace(/[,:;]+$/, "").trim();
+	}
+
+	const clipped = value.slice(0, maxLength);
+	const boundaryIndexes = [
+		clipped.lastIndexOf("."),
+		clipped.lastIndexOf(";"),
+		clipped.lastIndexOf(","),
+		clipped.lastIndexOf(" and "),
+		clipped.lastIndexOf(" with "),
+		clipped.lastIndexOf(" for "),
+	].filter((index) => index > 60);
+
+	const boundary = boundaryIndexes.length > 0 ? Math.max(...boundaryIndexes) : -1;
+
+	if (boundary > 0) {
+		return clipped.slice(0, boundary).replace(/[,:;]+$/, "").trim();
+	}
+
+	return clipped.replace(/\s+\S*$/, "").replace(/[,:;]+$/, "").trim();
+}
+
+function ensureSentence(value: string): string {
+	const trimmed = value.trim();
+
+	if (!trimmed) {
+		return "";
+	}
+
+	return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function toSentenceFragment(value: string): string {
+	const cleaned = value
+		.replace(/^this paper presents\s+/i, "")
+		.replace(/^this project presents\s+/i, "")
+		.replace(/^the project is\s+/i, "")
+		.replace(/^it is\s+/i, "")
+		.replace(/^is\s+/i, "")
+		.replace(/^evaluation spans\s+/i, "")
+		.replace(/^evaluation includes\s+/i, "")
+		.replace(/^implementation includes\s+/i, "")
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/[.!?]+$/, "");
+
+	if (!cleaned) {
+		return "";
+	}
+
+	return cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+}
+
+function sanitizeVoiceAnswer(answer: string): string {
+	return formatTechnicalTermsForSpeech(
+		answer
+			.replace(/\s+/g, " ")
+			.replace(/^["']|["']$/g, "")
+			.trim(),
+	);
+}
+
+function formatTechnicalTermsForSpeech(value: string): string {
+	return value
+		.replace(/\bChandraQuant[-\s]?Siddhanta\b/gi, "Chandra Quant Siddhanta")
+		.replace(/\bChandraQuant\b/g, "Chandra Quant")
+		.replace(/\bLangGraph\b/g, "Lang Graph")
+		.replace(/\bLangChain\b/g, "Lang Chain")
+		.replace(/\bHuggingFace\b/g, "Hugging Face")
+		.replace(/\bFAISS\b/g, "F A I S S")
+		.replace(/\bRAG\b/g, "R A G")
+		.replace(/\bOCR\b/g, "O C R")
+		.replace(/\bRTL-SDR\b/g, "R T L S D R")
+		.replace(/\bMAVLink\b/g, "Mav Link")
+		.replace(/\bMACD\b/g, "M A C D")
+		.replace(/\bROC-AUC\b/gi, "R O C A U C")
+		.replace(/%K\/%D/g, "percent K and percent D")
+		.replace(/\bCCI\b/g, "C C I");
+}
+
+function isProjectQuestion(normalizedQuestion: string): boolean {
+	return [
+		"project",
+		"tell me about",
+		"explain",
+		"built",
+		"what is",
+		"what did",
+		"how did",
+		"improve",
+	].some((term) => normalizedQuestion.includes(term));
+}
+
+function isCommitHistoryQuestion(normalizedQuestion: string): boolean {
+	return [
+		"commit",
+		"commit history",
+		"recent changes",
+		"repository history",
+		"repo history",
+		"what changed",
+	].some((term) => normalizedQuestion.includes(term));
+}
+
+function isRoleFitOrBackgroundQuestion(normalizedQuestion: string): boolean {
+	return [
+		"good fit",
+		"right person",
+		"why should",
+		"why vansh",
+		"background",
+		"experience",
+		"skills",
+		"strength",
+		"hire",
+		"role",
+		"internship",
+	].some((term) => normalizedQuestion.includes(term));
+}
+
+function isLikelyHeading(value: string): boolean {
+	const words = value.trim().split(/\s+/);
+
+	if (words.length <= 12 && !/[.!?]$/.test(value)) {
+		return true;
+	}
+
+	if (/^[A-Z][A-Za-z0-9\s:-]+$/.test(value) && words.length <= 14) {
+		return true;
+	}
+
+	return false;
+}
+
+function getRepositoryNamesFromEvidence(evidence: EvidenceResult[]): string[] {
+	const repositoryNames = new Set<string>();
+
+	for (const item of evidence) {
+		if (item.repositoryName) {
+			repositoryNames.add(item.repositoryName);
+		}
+
+		if (repositoryNames.size >= 2) {
+			break;
+		}
+	}
+
+	return [...repositoryNames];
+}
+
+function getBestEvidenceTitle(evidence: EvidenceResult[]): string {
+	const projectEvidence = evidence.find((item) => item.repositoryName);
+	const titledEvidence = projectEvidence ?? evidence.find((item) => item.title);
+
+	return titledEvidence?.repositoryName ?? titledEvidence?.title ?? "this project";
+}
+
+function toSpokenProjectName(value: string): string {
+	return value
+		.replace(/[-_]/g, " ")
+		.replace(/([a-z])([A-Z])/g, "$1 $2")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function formatEmailForSpeech(value: string): string {
+	const replacements: Record<string, string> = {
+		".": "dot",
+		"@": "at",
+		"_": "underscore",
+		"-": "hyphen",
+		"+": "plus",
+		"0": "zero",
+		"1": "one",
+		"2": "two",
+		"3": "three",
+		"4": "four",
+		"5": "five",
+		"6": "six",
+		"7": "seven",
+		"8": "eight",
+		"9": "nine",
+	};
+
+	return value
+		.trim()
+		.toLowerCase()
+		.split("")
+		.map((char) => replacements[char] ?? char)
+		.join(", ");
+}
+
+function buildVoiceRetrievalQuery(question: string): string {
+	const normalizedQuestion = question.toLowerCase();
+
+	if (isCommitHistoryQuestion(normalizedQuestion)) {
+		return [
+			question,
+			"commit history repository commits changed files implementation development evolution",
+		].join("\n");
+	}
+
+	if (isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
+		return [
+			question,
+			"resume education experience internship skills projects AI ML software engineering role fit",
+			"evidence from resume GitHub repositories project summaries README files implementation details",
+		].join("\n");
+	}
+
+	if (isProjectQuestion(normalizedQuestion)) {
+		return [
+			question,
+			"project purpose tech stack implementation evaluation design tradeoffs improvements README repository",
+		].join("\n");
+	}
+
+	return question;
+}
+
+function mergeEvidenceResults(evidenceGroups: EvidenceResult[]): EvidenceResult[] {
+	const seen = new Set<string>();
+	const merged: EvidenceResult[] = [];
+
+	for (const evidence of evidenceGroups) {
+		if (seen.has(evidence.chunkId)) {
+			continue;
+		}
+
+		seen.add(evidence.chunkId);
+		merged.push(evidence);
+	}
+
+	return merged;
+}
+
+function parseMetadata(value: string | null | undefined): Record<string, unknown> {
+	if (!value) {
+		return {};
+	}
+
+	try {
+		const parsedValue = JSON.parse(value);
+		return parsedValue && typeof parsedValue === "object"
+			? parsedValue as Record<string, unknown>
+			: {};
+	} catch {
+		return {};
+	}
 }
 
 function extractToolCalls(body: unknown): ToolCall[] {
