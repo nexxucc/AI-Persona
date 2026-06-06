@@ -136,7 +136,7 @@ async function generateVoiceGroundedAnswer(
 		return sanitizeVoiceAnswer(answer);
 	}
 
-	return createVoiceEvidenceFallback(evidence);
+	return createVoiceEvidenceFallback(question, evidence);
 }
 
 
@@ -269,8 +269,32 @@ function sanitizeVoiceAnswer(answer: string): string {
 		.trim();
 }
 
-function createVoiceEvidenceFallback(evidence: EvidenceResult[]): string {
+function createVoiceEvidenceFallback(
+	question: string,
+	evidence: EvidenceResult[],
+): string {
+	const normalizedQuestion = question.toLowerCase();
 	const highlights = selectVoiceEvidenceHighlights(evidence, 3);
+
+	if (isProjectQuestion(normalizedQuestion)) {
+		const projectTitle = getBestEvidenceTitle(evidence);
+
+		if (highlights.length >= 2) {
+			return [
+				`Based on the retrieved project evidence, ${projectTitle} is ${ensureSentence(highlights[0]).replace(/^the project is\s+/i, "")}`,
+				`The evidence also mentions ${ensureSentence(highlights[1])}`,
+				highlights[2] ? `Another relevant detail is ${ensureSentence(highlights[2])}` : "",
+			]
+				.filter(Boolean)
+				.join(" ");
+		}
+
+		if (highlights.length === 1) {
+			return `Based on the retrieved project evidence, ${projectTitle} is ${ensureSentence(highlights[0]).replace(/^the project is\s+/i, "")}`;
+		}
+
+		return `I found retrieved evidence for ${projectTitle}, but I do not have enough detail to summarize it reliably.`;
+	}
 
 	if (highlights.length >= 2) {
 		return [
@@ -294,6 +318,27 @@ function createVoiceEvidenceFallback(evidence: EvidenceResult[]): string {
 
 	return "I found some relevant evidence for this, but I cannot answer it reliably right now.";
 }
+
+function isProjectQuestion(normalizedQuestion: string): boolean {
+	return [
+		"project",
+		"tell me about",
+		"explain",
+		"built",
+		"what is",
+		"what did",
+		"how did",
+		"improve",
+	].some((term) => normalizedQuestion.includes(term));
+}
+
+function getBestEvidenceTitle(evidence: EvidenceResult[]): string {
+	const projectEvidence = evidence.find((item) => item.repositoryName);
+	const titledEvidence = projectEvidence ?? evidence.find((item) => item.title);
+
+	return titledEvidence?.repositoryName ?? titledEvidence?.title ?? "this project";
+}
+
 
 function selectVoiceEvidenceHighlights(
 	evidence: EvidenceResult[],
@@ -322,7 +367,7 @@ function selectVoiceEvidenceHighlights(
 				continue;
 			}
 
-			if (candidate.length < 35) {
+			if (candidate.length < 35 || isLikelyHeading(candidate)) {
 				continue;
 			}
 
@@ -337,6 +382,21 @@ function selectVoiceEvidenceHighlights(
 
 	return highlights;
 }
+
+function isLikelyHeading(value: string): boolean {
+	const words = value.trim().split(/\s+/);
+
+	if (words.length <= 12 && !/[.!?]$/.test(value)) {
+		return true;
+	}
+
+	if (/^[A-Z][A-Za-z0-9\s:-]+$/.test(value) && words.length <= 14) {
+		return true;
+	}
+
+	return false;
+}
+
 
 function cleanVoiceHighlight(value: string): string {
 	const cleaned = value
