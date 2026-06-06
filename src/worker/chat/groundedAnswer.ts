@@ -30,7 +30,7 @@ type GeminiPayload = {
 	}>;
 };
 
-const MAX_EVIDENCE_ITEMS = 6;
+const MAX_EVIDENCE_ITEMS = 8;
 const MAX_EVIDENCE_CHARS = 950;
 const MAX_GENERATION_ATTEMPTS = 2;
 const BASE_RETRY_DELAY_MS = 2500;
