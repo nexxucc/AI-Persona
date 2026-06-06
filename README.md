@@ -5,7 +5,7 @@ A live AI representative that can be **called** and **chatted with** to answer q
 | Interface | Link |
 | --- | --- |
 | Chat (production) | https://ai-persona.vanshjain05.workers.dev |
-| Chat (development) | https://ai-persona.vanshjain05.workers.dev |
+| Chat (development) | https://ai-persona-development.vanshjain05.workers.dev |
 | Voice agent | Vapi phone number (see submission form) |
 
 ---
@@ -127,8 +127,6 @@ Measured on the live worker with a 12-item golden Q&A set ([`scripts/eval/`](scr
 - Chat latency p50 **3.4s**; voice `answer_question` median **~3.1s**, `get_availability` **~1s**.
 - Booking task completion **3/3**, each with a Google Meet link + emailed invite.
 
-Full write-up, failure modes, and the conscious tradeoff are in [`docs/eval-report.pdf`](docs/eval-report.pdf).
-
 ## Repository layout
 
 ```
@@ -141,10 +139,3 @@ migrations/        D1 schema (corpus + chat sessions)
 vapi/              Version-controlled Vapi assistant config
 docs/              Architecture, status, eval report
 ```
-
-## Safety & grounding rules
-
-- Factual claims must be backed by retrieved resume or public GitHub evidence; retrieved text is treated as data, never as instructions.
-- Calendar tools expose availability and confirmed bookings only — private event details are never revealed.
-- A meeting is never reported as booked until the Google Calendar insertion succeeds; the slot is re-checked immediately before insertion.
-- Voice booking requires an explicit, character-by-character email confirmation before creating an event.
