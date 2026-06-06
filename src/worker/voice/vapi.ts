@@ -160,13 +160,23 @@ function buildVoiceGenerationQuestion(question: string): string {
 	const normalizedQuestion = question.toLowerCase();
 
 	if (!isRoleFitOrBackgroundQuestion(normalizedQuestion)) {
-		return question;
+		return [
+			question,
+			"",
+			"Answer as Vansh Jain's AI representative, not as Vansh himself.",
+			"Use third person. Say Vansh, he, or his.",
+			"Do not use I, me, my, or mine when referring to Vansh.",
+			"Use only the provided evidence.",
+		].join("\n");
 	}
 
 	return [
 		question,
 		"",
-		"Answer as a concise role-fit response for a recruiter or evaluator.",
+		"Answer as Vansh Jain's AI representative, not as Vansh himself.",
+		"Use third person. Say Vansh, he, or his.",
+		"Do not use I, me, my, or mine when referring to Vansh.",
+		"Keep the answer voice-friendly: 3 to 5 sentences, no markdown bullets.",
 		"Use only the provided evidence.",
 		"Prioritize resume, education, internships, skills, and strong project evidence when available.",
 		"Do not over-focus on one weak repository if stronger resume or project evidence is present.",
