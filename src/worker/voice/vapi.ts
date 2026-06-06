@@ -275,9 +275,9 @@ function createVoiceEvidenceFallback(evidence: EvidenceResult[]): string {
 	if (highlights.length >= 2) {
 		return [
 			"Vansh appears to be a strong fit for an AI or software engineering role based on the retrieved resume and project evidence.",
-			`The evidence highlights ${highlights[0]}.`,
-			`It also mentions ${highlights[1]}.`,
-			highlights[2] ? `Another relevant point is ${highlights[2]}.` : "",
+			`The evidence highlights ${ensureSentence(highlights[0])}`,
+			`It also mentions ${ensureSentence(highlights[1])}`,
+			highlights[2] ? `Another relevant point is ${ensureSentence(highlights[2])}` : "",
 			"Together, this shows practical experience across software implementation, applied AI, and machine learning work.",
 		]
 			.filter(Boolean)
@@ -285,7 +285,11 @@ function createVoiceEvidenceFallback(evidence: EvidenceResult[]): string {
 	}
 
 	if (highlights.length === 1) {
-		return `Vansh appears relevant for an AI or software engineering role based on the retrieved evidence. The evidence highlights ${highlights[0]}. I would avoid adding more detail unless more supporting evidence is retrieved.`;
+		return [
+			"Vansh appears relevant for an AI or software engineering role based on the retrieved evidence.",
+			`The evidence highlights ${ensureSentence(highlights[0])}`,
+			"I would avoid adding more detail unless more supporting evidence is retrieved.",
+		].join(" ");
 	}
 
 	return "I found some relevant evidence for this, but I cannot answer it reliably right now.";
@@ -335,17 +339,53 @@ function selectVoiceEvidenceHighlights(
 }
 
 function cleanVoiceHighlight(value: string): string {
-	return value
+	const cleaned = value
 		.replace(/^[\s\-•*→]+/, "")
 		.replace(/\[[^\]]+\]\([^)]+\)/g, "")
 		.replace(/https?:\/\/\S+/g, "")
 		.replace(/[`*_#>]/g, "")
 		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, 220)
-		.replace(/\s+\S*$/, "")
-		.replace(/[,:;]+$/, "")
 		.trim();
+
+	if (!cleaned) {
+		return "";
+	}
+
+	return shortenAtNaturalBoundary(cleaned, 190);
+}
+
+function shortenAtNaturalBoundary(value: string, maxLength: number): string {
+	if (value.length <= maxLength) {
+		return value.replace(/[,:;]+$/, "").trim();
+	}
+
+	const clipped = value.slice(0, maxLength);
+	const boundaryIndexes = [
+		clipped.lastIndexOf("."),
+		clipped.lastIndexOf(";"),
+		clipped.lastIndexOf(","),
+		clipped.lastIndexOf(" and "),
+		clipped.lastIndexOf(" with "),
+		clipped.lastIndexOf(" for "),
+	].filter((index) => index > 60);
+
+	const boundary = boundaryIndexes.length > 0 ? Math.max(...boundaryIndexes) : -1;
+
+	if (boundary > 0) {
+		return clipped.slice(0, boundary).replace(/[,:;]+$/, "").trim();
+	}
+
+	return clipped.replace(/\s+\S*$/, "").replace(/[,:;]+$/, "").trim();
+}
+
+function ensureSentence(value: string): string {
+	const trimmed = value.trim();
+
+	if (!trimmed) {
+		return "";
+	}
+
+	return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 
