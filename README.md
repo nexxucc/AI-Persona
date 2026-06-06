@@ -1,6 +1,6 @@
-# AI Persona — Voice + Chat Interview Agent for Vansh Jain
+# AI Persona — Voice and Chat Interview Agent
 
-A live AI representative that can be **called** and **chatted with** to answer questions about Vansh Jain's background, projects, and GitHub repositories, and to **book a real interview** — end to end, with no human in the loop. Every factual answer is RAG-grounded over the actual resume and public GitHub corpus; nothing is hardcoded.
+A live AI representative that can be **called** and **chatted with** to answer questions about my background, projects, and GitHub repositories, and to **book a real interview** — end to end, with no human in the loop. Every factual answer is RAG-grounded over the actual resume and public GitHub corpus.
 
 | Interface | Link |
 | --- | --- |
