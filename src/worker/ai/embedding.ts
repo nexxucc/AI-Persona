@@ -1,8 +1,10 @@
+import { withGeminiKeyRotation } from "./geminiKeys";
+
 export const EMBEDDING_MODEL = "gemini-embedding-001";
 export const EMBEDDING_DIMENSIONS = 768;
 
 export async function embedQuery(
-	apiKey: string,
+	apiKeys: string[],
 	query: string,
 ): Promise<number[]> {
 	const trimmedQuery = query.trim();
@@ -11,6 +13,15 @@ export async function embedQuery(
 		throw new Error("Cannot embed an empty query.");
 	}
 
+	return withGeminiKeyRotation(apiKeys, (apiKey) =>
+		embedQueryWithKey(apiKey, trimmedQuery),
+	);
+}
+
+async function embedQueryWithKey(
+	apiKey: string,
+	trimmedQuery: string,
+): Promise<number[]> {
 	const response = await fetch(
 		`https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${encodeURIComponent(apiKey)}`,
 		{

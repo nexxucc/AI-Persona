@@ -197,9 +197,22 @@ dist
 !.env.example
 .dev.vars*
 !.dev.vars.example
+_dev.vars
+_dev.vars*
 
 ### AI Persona local/private files ###
 *.kdbx
 private/
 local-data/
 eval-results/local/
+
+# Local planning / agent scratch files
+docs/STATUS-AND-PLAN.md
+.agent/
+.agents/
+scratch/
+scratchpad/
+transcripts/
+call-logs/
+conversation-logs/
+*.log

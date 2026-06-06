@@ -1,3 +1,4 @@
+import { isGeminiQuotaError, withGeminiKeyRotation } from "../ai/geminiKeys";
 import type { EvidenceResult } from "../retrieval/types";
 
 export const GROUNDED_CHAT_MODEL = "gemini-2.5-flash";
@@ -35,7 +36,7 @@ const MAX_GENERATION_ATTEMPTS = 2;
 const BASE_RETRY_DELAY_MS = 2500;
 
 export async function generateGroundedAnswer(
-	apiKey: string,
+	apiKeys: string[],
 	question: string,
 	evidence: EvidenceResult[],
 ): Promise<GroundedAnswer> {
@@ -52,8 +53,8 @@ export async function generateGroundedAnswer(
 	}
 
 	try {
-		let payload = (await generateContentWithRetry(
-			apiKey,
+		let payload = (await generateContentWithRotation(
+			apiKeys,
 			buildGroundedPrompt(trimmedQuestion, selectedEvidence),
 		)) as GeminiPayload;
 
@@ -61,8 +62,8 @@ export async function generateGroundedAnswer(
 		let finishReason = payload.candidates?.[0]?.finishReason ?? "UNKNOWN";
 
 		if (finishReason !== "STOP" || isIncompleteAnswer(answer)) {
-			payload = (await generateContentWithRetry(
-				apiKey,
+			payload = (await generateContentWithRotation(
+				apiKeys,
 				buildGroundedPrompt(trimmedQuestion, selectedEvidence, true),
 			)) as GeminiPayload;
 
@@ -83,7 +84,7 @@ export async function generateGroundedAnswer(
 	} catch (error) {
 		const failure = error instanceof Error ? error : new Error(String(error));
 
-		if (isQuotaError(failure)) {
+		if (isGeminiQuotaError(failure)) {
 			return createEvidenceFallbackAnswer(trimmedQuestion, selectedEvidence);
 		}
 
@@ -91,7 +92,20 @@ export async function generateGroundedAnswer(
 	}
 }
 
-async function generateContentWithRetry(
+/**
+ * Generate content, rotating across all keys on quota errors and retrying
+ * transient (5xx/UNAVAILABLE) errors per key.
+ */
+async function generateContentWithRotation(
+	apiKeys: string[],
+	prompt: string,
+): Promise<unknown> {
+	return withGeminiKeyRotation(apiKeys, (apiKey) =>
+		generateContentWithTransientRetry(apiKey, prompt),
+	);
+}
+
+async function generateContentWithTransientRetry(
 	apiKey: string,
 	prompt: string,
 ): Promise<unknown> {
@@ -103,7 +117,7 @@ async function generateContentWithRetry(
 		} catch (error) {
 			lastError = error instanceof Error ? error : new Error(String(error));
 
-			if (isQuotaError(lastError)) {
+			if (isGeminiQuotaError(lastError)) {
 				throw lastError;
 			}
 
@@ -141,6 +155,9 @@ async function generateContent(apiKey: string, prompt: string): Promise<unknown>
 					temperature: 0.35,
 					topP: 0.85,
 					maxOutputTokens: 700,
+					thinkingConfig: {
+						thinkingBudget: 0,
+					},
 				},
 			}),
 		},
@@ -163,15 +180,6 @@ function isRetryableGeminiError(error: Error): boolean {
 		error.message.includes(" 503 ") ||
 		error.message.includes(" 504 ") ||
 		error.message.includes("UNAVAILABLE")
-	);
-}
-
-function isQuotaError(error: Error): boolean {
-	return (
-		error.message.includes(" 429 ") ||
-		error.message.includes("RESOURCE_EXHAUSTED") ||
-		error.message.includes("GenerateRequestsPerDayPerProjectPerModel") ||
-		error.message.includes("generate_content_free_tier_requests")
 	);
 }
 

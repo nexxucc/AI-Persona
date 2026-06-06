@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { getGeminiApiKeys } from "./ai/geminiKeys";
 import { getAvailability, bookCalendarEvent } from "./calendar/googleCalendar";
 import { handleCalendarChatMessage } from "./chat/calendarIntent";
 import { generateGroundedAnswer } from "./chat/groundedAnswer";
@@ -32,7 +33,7 @@ app.post("/api/retrieval/search", async (c) => {
 	const evidence = await retrieveHybridEvidence(
 		c.env.DB,
 		c.env.VECTORIZE,
-		c.env.GEMINI_API_KEY,
+		getGeminiApiKeys(c.env),
 		query,
 	);
 
@@ -103,10 +104,12 @@ app.post("/api/chat", async (c) => {
 		return c.json(calendarResponse);
 	}
 
+	const geminiApiKeys = getGeminiApiKeys(c.env);
+
 	const evidence = await retrieveHybridEvidence(
 		c.env.DB,
 		c.env.VECTORIZE,
-		c.env.GEMINI_API_KEY,
+		geminiApiKeys,
 		message,
 		{
 			finalLimit: 5,
@@ -114,7 +117,7 @@ app.post("/api/chat", async (c) => {
 	);
 
 	const groundedAnswer = await generateGroundedAnswer(
-		c.env.GEMINI_API_KEY,
+		geminiApiKeys,
 		message,
 		evidence,
 	);
