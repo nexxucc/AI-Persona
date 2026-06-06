@@ -11,7 +11,7 @@ const MAX_LIMIT = 20;
 export async function searchSemanticEvidence(
 	db: D1Database,
 	vectorize: VectorizeIndex,
-	geminiApiKey: string,
+	geminiApiKeys: string[],
 	query: string,
 	options: SemanticSearchOptions = {},
 ): Promise<EvidenceResult[]> {
@@ -21,7 +21,7 @@ export async function searchSemanticEvidence(
 		return [];
 	}
 
-	const embedding = await embedQuery(geminiApiKey, normalizedQuery);
+	const embedding = await embedQuery(geminiApiKeys, normalizedQuery);
 	const limit = clampLimit(options.limit);
 
 	const vectorMatches = await vectorize.query(embedding, {
@@ -51,7 +51,7 @@ export async function searchSemanticEvidence(
 				commit_sha,
 				public_url,
 				content,
-				source_chunks.metadata_json AS metadata_json AS metadata
+				source_chunks.metadata_json AS metadata
 			FROM source_chunks
 			WHERE source_chunks.id IN (${placeholders});
 			`,

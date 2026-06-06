@@ -137,12 +137,18 @@ export async function bookCalendarEvent(
 			timeZone: timezone,
 		},
 		attendees: guestEmail ? [{ email: guestEmail, displayName: guestName }] : [],
+		conferenceData: {
+			createRequest: {
+				requestId: crypto.randomUUID(),
+				conferenceSolutionKey: { type: "hangoutsMeet" },
+			},
+		},
 	};
 
 	const response = await fetch(
 		`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
 			bookingCalendarId,
-		)}/events?sendUpdates=all`,
+		)}/events?sendUpdates=all&conferenceDataVersion=1`,
 		{
 			method: "POST",
 			headers: {

@@ -22,6 +22,12 @@
 			"migrations_dir": "migrations"
 		}
 	],
+	"vectorize": [
+		{
+			"binding": "VECTORIZE",
+			"index_name": "persona-vectors-dev"
+		}
+	],
 	"env": {
 		"development": {
 			"vars": {

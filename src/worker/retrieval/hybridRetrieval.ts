@@ -40,7 +40,7 @@ const AI_PROJECT_TERMS = [
 export async function retrieveHybridEvidence(
 	db: D1Database,
 	vectorize: VectorizeIndex,
-	geminiApiKey: string,
+	geminiApiKeys: string[],
 	query: string,
 	options: HybridRetrievalOptions = {},
 ): Promise<EvidenceResult[]> {
@@ -59,7 +59,7 @@ export async function retrieveHybridEvidence(
 			searchExactEvidence(db, normalizedQuery, {
 				limit: options.exactLimit ?? (projectQuery ? 12 : DEFAULT_EXACT_LIMIT),
 			}),
-			searchSemanticEvidence(db, vectorize, geminiApiKey, normalizedQuery, {
+			searchSemanticEvidence(db, vectorize, geminiApiKeys, normalizedQuery, {
 				limit: options.semanticLimit ?? (projectQuery ? 14 : DEFAULT_SEMANTIC_LIMIT),
 			}),
 			broadProjectQuery ? searchCuratedProjectSeeds(db) : Promise.resolve([]),

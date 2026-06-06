@@ -1,3 +1,4 @@
+import { getGeminiApiKeys, isGeminiQuotaError, withGeminiKeyRotation } from "../ai/geminiKeys";
 import { bookCalendarEvent, getAvailability } from "../calendar/googleCalendar";
 import { retrieveHybridEvidence } from "../retrieval/hybridRetrieval";
 import type { AvailabilitySlot } from "../calendar/types";
@@ -31,6 +32,8 @@ type GeminiGenerateContentResponse = {
 };
 
 const VOICE_ANSWER_MODEL = "gemini-2.5-flash";
+const VOICE_GENERATION_ATTEMPTS = 2;
+const VOICE_RETRY_DELAY_MS = 1500;
 
 export async function handleVapiToolCalls(
 	env: AppBindings,
@@ -111,7 +114,7 @@ async function answerQuestion(
 	const generationQuestion = buildVoiceGenerationQuestion(question);
 
 	return generateVoiceGroundedAnswer(
-		env.GEMINI_API_KEY,
+		getGeminiApiKeys(env),
 		generationQuestion,
 		evidence,
 		question,
@@ -119,7 +122,7 @@ async function answerQuestion(
 }
 
 async function generateVoiceGroundedAnswer(
-	apiKey: string,
+	apiKeys: string[],
 	question: string,
 	evidence: EvidenceResult[],
 	originalQuestion: string,
@@ -130,7 +133,7 @@ async function generateVoiceGroundedAnswer(
 		return "I do not have enough retrieved evidence to answer that reliably.";
 	}
 
-	const answer = await requestVoiceAnswer(apiKey, question, evidenceText);
+	const answer = await requestVoiceAnswer(apiKeys, question, evidenceText);
 
 	if (isUsableVoiceAnswer(answer)) {
 		return sanitizeVoiceAnswer(answer);
@@ -140,7 +143,7 @@ async function generateVoiceGroundedAnswer(
 }
 
 async function requestVoiceAnswer(
-	apiKey: string,
+	apiKeys: string[],
 	question: string,
 	evidenceText: string,
 ): Promise<string | null> {
@@ -163,47 +166,103 @@ async function requestVoiceAnswer(
 	].join("\n");
 
 	try {
-		const response = await fetch(
-			`https://generativelanguage.googleapis.com/v1beta/models/${VOICE_ANSWER_MODEL}:generateContent?key=${apiKey}`,
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					contents: [
-						{
-							role: "user",
-							parts: [
-								{
-									text: prompt,
-								},
-							],
-						},
-					],
-					generationConfig: {
-						temperature: 0.15,
-						topP: 0.8,
-						maxOutputTokens: 360,
-					},
-				}),
-			},
+		return await withGeminiKeyRotation(apiKeys, (apiKey) =>
+			requestVoiceAnswerWithRetry(apiKey, prompt),
 		);
-
-		if (!response.ok) {
-			return null;
-		}
-
-		const data = (await response.json()) as GeminiGenerateContentResponse;
-		const answer = data.candidates?.[0]?.content?.parts
-			?.map((part) => part.text ?? "")
-			.join("")
-			.trim();
-
-		return answer || null;
 	} catch {
 		return null;
 	}
+}
+
+async function requestVoiceAnswerWithRetry(
+	apiKey: string,
+	prompt: string,
+): Promise<string | null> {
+	let lastError: Error | null = null;
+
+	for (let attempt = 1; attempt <= VOICE_GENERATION_ATTEMPTS; attempt += 1) {
+		try {
+			return await requestVoiceAnswerOnce(apiKey, prompt);
+		} catch (error) {
+			lastError = error instanceof Error ? error : new Error(String(error));
+
+			if (isGeminiQuotaError(lastError)) {
+				throw lastError;
+			}
+
+			if (!isRetryableVoiceError(lastError) || attempt === VOICE_GENERATION_ATTEMPTS) {
+				throw lastError;
+			}
+
+			await voiceSleep(VOICE_RETRY_DELAY_MS * attempt);
+		}
+	}
+
+	throw lastError ?? new Error("Gemini voice answer request failed.");
+}
+
+async function requestVoiceAnswerOnce(
+	apiKey: string,
+	prompt: string,
+): Promise<string | null> {
+	const response = await fetch(
+		`https://generativelanguage.googleapis.com/v1beta/models/${VOICE_ANSWER_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				contents: [
+					{
+						role: "user",
+						parts: [
+							{
+								text: prompt,
+							},
+						],
+					},
+				],
+				generationConfig: {
+					temperature: 0.15,
+					topP: 0.8,
+					maxOutputTokens: 512,
+					thinkingConfig: {
+						thinkingBudget: 0,
+					},
+				},
+			}),
+		},
+	);
+
+	if (!response.ok) {
+		const errorBody = await response.text();
+		throw new Error(
+			`Gemini voice answer request failed: ${response.status} ${errorBody}`,
+		);
+	}
+
+	const data = (await response.json()) as GeminiGenerateContentResponse;
+	const answer = data.candidates?.[0]?.content?.parts
+		?.map((part) => part.text ?? "")
+		.join("")
+		.trim();
+
+	return answer || null;
+}
+
+function isRetryableVoiceError(error: Error): boolean {
+	return (
+		error.message.includes(" 500 ") ||
+		error.message.includes(" 502 ") ||
+		error.message.includes(" 503 ") ||
+		error.message.includes(" 504 ") ||
+		error.message.includes("UNAVAILABLE")
+	);
+}
+
+function voiceSleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isUsableVoiceAnswer(answer: string | null): answer is string {
@@ -281,7 +340,7 @@ async function retrieveVoiceEvidence(
 			retrieveHybridEvidence(
 				env.DB,
 				env.VECTORIZE,
-				env.GEMINI_API_KEY,
+				getGeminiApiKeys(env),
 				roleFitQuery,
 				{
 					finalLimit: 8,
@@ -298,7 +357,7 @@ async function retrieveVoiceEvidence(
 	const baseEvidence = await retrieveHybridEvidence(
 		env.DB,
 		env.VECTORIZE,
-		env.GEMINI_API_KEY,
+		getGeminiApiKeys(env),
 		buildVoiceRetrievalQuery(question),
 		{
 			finalLimit: isProjectQuestion(normalizedQuestion) || isCommitHistoryQuestion(normalizedQuestion) ? 10 : 8,
@@ -581,7 +640,8 @@ async function fetchCommitEvidenceByRepositoryNames(
 					WHEN commit_sha IS NOT NULL THEN 2
 					ELSE 3
 				END,
-				chunk_index ASC
+				chunk_index ASC,
+				id ASC
 			LIMIT ?
 			`,
 		)
@@ -893,9 +953,17 @@ function ensureSentence(value: string): string {
 
 function toSentenceFragment(value: string): string {
 	const cleaned = value
+		// Strip leading "this/the <noun> <verb>" stems that produce double-verb
+		// seams when embedded after "It includes ...", e.g.
+		// "It includes this report documents the architecture".
+		.replace(
+			/^(?:this|the)\s+(?:report|paper|project|document|repository|repo|readme|summary|framework|system|study)\s+(?:documents?|presents?|introduces?|describes?|details?|covers?|explains?|provides?|outlines?|shows?|is|was)\s+/i,
+			"",
+		)
 		.replace(/^this paper presents\s+/i, "")
 		.replace(/^this project presents\s+/i, "")
 		.replace(/^the project is\s+/i, "")
+		.replace(/^it includes\s+/i, "")
 		.replace(/^it is\s+/i, "")
 		.replace(/^is\s+/i, "")
 		.replace(/^evaluation spans\s+/i, "")
@@ -909,7 +977,24 @@ function toSentenceFragment(value: string): string {
 		return "";
 	}
 
-	return cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+	return lowercaseLeadingWord(cleaned);
+}
+
+/**
+ * Lowercase the first character only when the leading word is an ordinary
+ * capitalized word. Acronyms (ROC-AUC, NIFTY, MACD) and mixed-case names
+ * (ChandraQuant) are left intact so they are not mangled into "rOC-AUC".
+ */
+function lowercaseLeadingWord(value: string): string {
+	const firstWord = value.split(/\s+/, 1)[0] ?? "";
+	const letters = firstWord.replace(/[^A-Za-z]/g, "");
+	const uppercaseCount = (letters.match(/[A-Z]/g) ?? []).length;
+
+	if (uppercaseCount > 1) {
+		return value;
+	}
+
+	return value.charAt(0).toLowerCase() + value.slice(1);
 }
 
 function sanitizeVoiceAnswer(answer: string): string {
@@ -1341,7 +1426,8 @@ async function fetchCommitEvidenceByQuestion(
 					WHEN commit_sha IS NOT NULL THEN 2
 					ELSE 3
 				END,
-				chunk_index ASC
+				chunk_index ASC,
+				id ASC
 			LIMIT ?
 			`,
 		)

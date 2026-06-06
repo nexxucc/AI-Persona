@@ -9,6 +9,8 @@ export type AppBindings = Env & {
 	APP_ENV: "development" | "production";
 
 	GEMINI_API_KEY: string;
+	/** Optional comma-separated list of additional Gemini keys for quota rotation. */
+	GEMINI_API_KEYS?: string;
 
 	GOOGLE_CLIENT_ID: string;
 	GOOGLE_CLIENT_SECRET: string;
